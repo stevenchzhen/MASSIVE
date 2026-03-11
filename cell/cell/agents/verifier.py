@@ -27,6 +27,17 @@ class VerifierAgent:
         for test_case in spec.test_cases:
             results.append(await sandbox.run_test(artifact, test_case))
 
+        for regression_case in spec.base_test_cases or []:
+            regression_result = await sandbox.run_test(artifact, regression_case)
+            results.append(
+                VerificationResult(
+                    check_name=f"regression:{regression_case.case_id}",
+                    passed=regression_result.passed,
+                    details=regression_result.details,
+                    observed_output=regression_result.observed_output,
+                )
+            )
+
         for edge_case in spec.edge_cases:
             results.append(await sandbox.run_test(artifact, edge_case))
 
@@ -236,4 +247,3 @@ def schema_matches(value: Any, schema: dict[str, Any]) -> bool:
     if schema_type == "null":
         return value is None
     return True
-

@@ -10,7 +10,7 @@ async def test_diagnostician_emits_tool_spec(mock_model_factory) -> None:
             [
                 json.dumps(
                     {
-                        "action": "tool_spec",
+                        "action": "create_new",
                         "tool_spec": {
                             "name": "adder",
                             "description": "Adds two numbers",
@@ -44,7 +44,7 @@ async def test_diagnostician_emits_tool_spec(mock_model_factory) -> None:
         AgentInput(payload={"blocker": "missing capability"}, tools=[], context_window="", config={})
     )
     assert result.status == "complete"
-    assert result.payload["action"] == "tool_spec"
+    assert result.payload["action"] == "create_new"
     assert result.payload["tool_spec"]["name"] == "adder"
 
 
@@ -54,3 +54,10 @@ async def test_diagnostician_context_request(mock_model_factory) -> None:
     assert result.status == "complete"
     assert result.payload["context_needed"] == "Need schema"
 
+
+async def test_diagnostician_use_existing(mock_model_factory) -> None:
+    agent = DiagnosticianAgent(mock_model_factory([json.dumps({"action": "use_existing", "existing_tool_id": "csv_reader"})]))
+    result = await agent.invoke(AgentInput(payload={"blocker": "need csv filtering"}, tools=[], context_window="", config={}))
+    assert result.status == "complete"
+    assert result.payload["action"] == "use_existing"
+    assert result.payload["existing_tool_id"] == "csv_reader"

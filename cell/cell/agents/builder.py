@@ -20,6 +20,15 @@ class BuilderAgent(Agent):
             "Respond with ONLY the Python source code. No markdown, no explanation, no backticks.",
             f"ToolSpec:\n{spec.model_dump_json(indent=2)}",
         ]
+        if spec.base_tool_id:
+            prompt.extend(
+                [
+                    f"You are adapting the existing tool '{spec.base_tool_id}', not replacing it blindly.",
+                    "The adapted tool must preserve prior behavior and pass all base regression tests.",
+                    "Existing base tool source code:",
+                    spec.base_tool_source or "",
+                ]
+            )
         if previous_failure:
             prompt.extend(
                 [
@@ -82,4 +91,3 @@ def _extract_source(content: str) -> str:
     except Exception:
         pass
     return stripped
-

@@ -66,14 +66,27 @@ def _task() -> dict:
     }
 
 
-async def _execute_with_activities(executor_fn, diagnostician_fn, builder_fn, verifier_fn, config: dict) -> dict:
+async def _execute_with_activities(
+    executor_fn,
+    diagnostician_fn,
+    builder_fn,
+    verifier_fn,
+    config: dict,
+    install_public_fn=None,
+) -> dict:
     async with await WorkflowEnvironment.start_time_skipping() as env:
         client: Client = env.client
         async with Worker(
             client,
             task_queue="test-cell",
             workflows=[CellWorkflow],
-            activities=[executor_fn, diagnostician_fn, builder_fn, verifier_fn],
+            activities=[
+                executor_fn,
+                diagnostician_fn,
+                builder_fn,
+                verifier_fn,
+                install_public_fn or _unused_install_public_tool,
+            ],
         ):
             return await client.execute_workflow(
                 "CellWorkflow",
@@ -99,6 +112,11 @@ async def _unused_builder(spec: dict, model_config: dict | str, previous_failure
 @activity.defn(name="run_verifier")
 async def _unused_verifier(artifact: dict, spec: dict, sandbox_config: dict) -> dict:
     return {"passed": True, "results": [], "failure_report": None, "artifact_id": "a", "spec_id": "s"}
+
+
+@activity.defn(name="install_public_tool")
+async def _unused_install_public_tool(tool_id: str, static_tools: list[str]) -> dict:
+    return {}
 
 
 @pytest.mark.timeout(30)
@@ -181,7 +199,7 @@ async def test_workflow_blocker_triggers_tool_build_loop() -> None:
         return {
             "status": "complete",
             "payload": {
-                "action": "tool_spec",
+                "action": "create_new",
                 "tool_spec": {
                     "spec_id": "spec-1",
                     "name": "adder",
@@ -289,7 +307,7 @@ async def test_workflow_standard_topology_skips_diagnosing_state() -> None:
         return {
             "status": "complete",
             "payload": {
-                "action": "tool_spec",
+                "action": "create_new",
                 "tool_spec": {
                     "spec_id": "spec-1",
                     "name": "adder",
@@ -340,6 +358,180 @@ async def test_workflow_standard_topology_skips_diagnosing_state() -> None:
 
     result = await _execute_with_activities(run_executor, run_diagnostician, run_builder, run_verifier, _base_config("standard"))
     assert result["state_transitions"] == ["executing", "building", "verifying", "executing", "complete"]
+
+
+@pytest.mark.timeout(30)
+async def test_workflow_use_existing_tool_skips_verify() -> None:
+    state = {"count": 0}
+
+    @activity.defn(name="run_executor")
+    async def run_executor(task_input: dict, tools: list[str], model_config: dict | str, context: str) -> dict:
+        if state["count"] == 0:
+            state["count"] += 1
+            return {
+                "status": "blocker",
+                "payload": {
+                    "blocker": {
+                        "blocker_id": "blk-1",
+                        "category": "missing_capability",
+                        "description": "Need csv filtering",
+                        "attempted_approaches": ["manual"],
+                        "what_would_unblock": "Use csv_reader",
+                        "input_sample": None,
+                        "confidence_in_diagnosis": 0.9,
+                    }
+                },
+                "token_usage": {"input": 1, "output": 1},
+                "model_id": "mock",
+                "latency_ms": 5,
+                "cost_usd": 0.01,
+            }
+        assert "csv_reader" in tools
+        return {
+            "status": "complete",
+            "payload": {
+                "confidence": 0.9,
+                "completion_status": "complete",
+                "result": {"summary": "done", "key_findings": ["used existing"]},
+                "sources": [],
+                "assumptions": [],
+            },
+            "token_usage": {"input": 1, "output": 1},
+            "model_id": "mock",
+            "latency_ms": 5,
+            "cost_usd": 0.01,
+        }
+
+    @activity.defn(name="run_diagnostician")
+    async def run_diagnostician(blocker: dict, model_config: dict | str) -> dict:
+        return {
+            "status": "complete",
+            "payload": {"action": "use_existing", "existing_tool_id": "csv_reader"},
+            "token_usage": {"input": 1, "output": 1},
+            "model_id": "mock",
+            "latency_ms": 5,
+            "cost_usd": 0.01,
+        }
+
+    result = await _execute_with_activities(
+        run_executor,
+        run_diagnostician,
+        _unused_builder,
+        _unused_verifier,
+        _base_config(),
+    )
+    assert result["state_transitions"] == ["executing", "diagnosing", "executing", "complete"]
+
+
+@pytest.mark.timeout(30)
+async def test_workflow_install_public_tool() -> None:
+    state = {"count": 0}
+
+    @activity.defn(name="run_executor")
+    async def run_executor(task_input: dict, tools: list[str], model_config: dict | str, context: str) -> dict:
+        if state["count"] == 0:
+            state["count"] += 1
+            return {
+                "status": "blocker",
+                "payload": {
+                    "blocker": {
+                        "blocker_id": "blk-1",
+                        "category": "missing_capability",
+                        "description": "Need adder",
+                        "attempted_approaches": ["manual"],
+                        "what_would_unblock": "Install public tool",
+                        "input_sample": None,
+                        "confidence_in_diagnosis": 0.9,
+                    }
+                },
+                "token_usage": {"input": 1, "output": 1},
+                "model_id": "mock",
+                "latency_ms": 5,
+                "cost_usd": 0.01,
+            }
+        assert "public_adder" in tools
+        return {
+            "status": "complete",
+            "payload": {
+                "confidence": 0.9,
+                "completion_status": "complete",
+                "result": {"summary": "done", "key_findings": ["installed public"]},
+                "sources": [],
+                "assumptions": [],
+            },
+            "token_usage": {"input": 1, "output": 1},
+            "model_id": "mock",
+            "latency_ms": 5,
+            "cost_usd": 0.01,
+        }
+
+    @activity.defn(name="run_diagnostician")
+    async def run_diagnostician(blocker: dict, model_config: dict | str) -> dict:
+        return {
+            "status": "complete",
+            "payload": {"action": "install_public", "public_tool_id": "public_adder"},
+            "token_usage": {"input": 1, "output": 1},
+            "model_id": "mock",
+            "latency_ms": 5,
+            "cost_usd": 0.01,
+        }
+
+    @activity.defn(name="install_public_tool")
+    async def install_public_tool(tool_id: str, static_tools: list[str]) -> dict:
+        return {
+            "artifact": {
+                "artifact_id": "art-2",
+                "spec_id": "spec-2",
+                "name": "public_adder",
+                "entry_point": "public_adder",
+                "source_code": "def public_adder(a,b): return {'result': a+b}",
+                "created_at": "2026-03-10T00:00:00Z",
+            },
+            "spec": {
+                "spec_id": "spec-2",
+                "name": "public_adder",
+                "description": "Adds two numbers",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"a": {"type": "number"}, "b": {"type": "number"}},
+                    "required": ["a", "b"],
+                },
+                "output_schema": {
+                    "type": "object",
+                    "properties": {"result": {"type": "number"}},
+                    "required": ["result"],
+                },
+                "test_cases": [
+                    {"description": "one", "input": {"a": 1, "b": 2}, "expected_output": {"result": 3}},
+                    {"description": "two", "input": {"a": 2, "b": 3}, "expected_output": {"result": 5}},
+                    {"description": "three", "input": {"a": 0, "b": 0}, "expected_output": {"result": 0}},
+                ],
+                "edge_cases": [
+                    {"description": "large", "input": {"a": 10000, "b": 1}, "expected_output": {"result": 10001}},
+                    {"description": "float", "input": {"a": 1.5, "b": 2.5}, "expected_output": {"result": 4.0}},
+                ],
+                "constraints": ["pure"],
+                "base_tool_id": None,
+                "base_tool_source": None,
+                "base_test_cases": None,
+            },
+            "origin": "public",
+        }
+
+    @activity.defn(name="run_verifier")
+    async def run_verifier(artifact: dict, spec: dict, sandbox_config: dict) -> dict:
+        return {"artifact_id": "art-2", "spec_id": "spec-2", "passed": True, "results": [], "failure_report": None}
+
+    result = await _execute_with_activities(
+        run_executor,
+        run_diagnostician,
+        _unused_builder,
+        run_verifier,
+        _base_config(),
+        install_public_fn=install_public_tool,
+    )
+    assert result["state_transitions"] == ["executing", "diagnosing", "installing", "verifying", "executing", "complete"]
+    assert "public_adder" in result["dynamic_tools_created"]
 
 
 @pytest.mark.timeout(30)

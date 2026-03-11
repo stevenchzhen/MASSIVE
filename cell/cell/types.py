@@ -20,6 +20,7 @@ class CellState(str, Enum):
     INITIALIZING = "initializing"
     EXECUTING = "executing"
     DIAGNOSING = "diagnosing"
+    INSTALLING = "installing"
     BUILDING = "building"
     VERIFYING = "verifying"
     WAIT_HUMAN = "wait_human"
@@ -77,6 +78,15 @@ class Topology(str, Enum):
     MINIMAL = "minimal"
     STANDARD = "standard"
     HIGH_TRUST = "high_trust"
+
+
+class DiagnosisAction(str, Enum):
+    USE_EXISTING = "use_existing"
+    INSTALL_PUBLIC = "install_public"
+    ADAPT_EXISTING = "adapt_existing"
+    CREATE_NEW = "create_new"
+    CONTEXT_REQUEST = "context_request"
+    ESCALATE = "escalate"
 
 
 class Document(FrozenModel):
@@ -178,6 +188,18 @@ class ToolSpec(FrozenModel):
     constraints: list[str] = Field(
         default_factory=list,
         description="Additional operational or behavioral constraints.",
+    )
+    base_tool_id: str | None = Field(
+        default=None,
+        description="Existing tool identifier being adapted.",
+    )
+    base_tool_source: str | None = Field(
+        default=None,
+        description="Source code of the base tool when adapting an existing tool.",
+    )
+    base_test_cases: list[TestCase] | None = Field(
+        default=None,
+        description="Regression test cases that must continue to pass after adaptation.",
     )
 
     @field_validator("test_cases")

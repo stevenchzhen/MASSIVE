@@ -12,6 +12,7 @@ from cell.types import (
     CellMessage,
     CellState,
     CompletionStatus,
+    DiagnosisAction,
     MessageType,
     TaskInput,
     Topology,
@@ -239,17 +240,80 @@ class CellWorkflow:
                 return finish(CellState.ESCALATED, reasoning_summary)
 
             action = diagnosis["payload"]["action"]
-            if action == "escalate":
+            if action == DiagnosisAction.ESCALATE.value:
                 result_payload = {"status": "escalated", "reason": diagnosis["payload"]["escalation_reason"]}
                 reasoning_summary = "The blocker was escalated."
                 completion_status = CompletionStatus.INCONCLUSIVE
                 return finish(CellState.ESCALATED, reasoning_summary)
-            if action == "context_request":
+            if action == DiagnosisAction.CONTEXT_REQUEST.value:
                 if current_state != CellState.WAIT_HUMAN:
                     bus.log_state_transition(current_state, CellState.WAIT_HUMAN)
                     current_state = CellState.WAIT_HUMAN
                 result_payload = {"status": "escalated", "reason": diagnosis["payload"]["context_needed"]}
                 reasoning_summary = "Additional context is required to continue."
+                completion_status = CompletionStatus.INCONCLUSIVE
+                return finish(CellState.ESCALATED, reasoning_summary)
+            if action == DiagnosisAction.USE_EXISTING.value:
+                existing_tool_id = diagnosis["payload"]["existing_tool_id"]
+                if existing_tool_id not in tools:
+                    tools.append(existing_tool_id)
+                bus.emit(
+                    CellMessage(
+                        id=f"msg_local_{len(bus.get_log())}",
+                        timestamp=workflow.now(),
+                        source_agent=AgentRole.RUNTIME,
+                        target_agent=AgentRole.EXECUTOR,
+                        message_type=MessageType.TOOL_READY,
+                        payload={"tool_id": existing_tool_id, "source": "local_registry"},
+                        correlation_id=f"tool-{blockers_encountered}",
+                    )
+                )
+                bus.log_state_transition(current_state, CellState.EXECUTING)
+                current_state = CellState.EXECUTING
+                continue
+
+            if action == DiagnosisAction.INSTALL_PUBLIC.value:
+                public_tool_id = diagnosis["payload"]["public_tool_id"]
+                if current_state != CellState.INSTALLING:
+                    bus.log_state_transition(current_state, CellState.INSTALLING)
+                    current_state = CellState.INSTALLING
+                installed = await workflow.execute_activity(
+                    "install_public_tool",
+                    args=[public_tool_id, cfg.static_tools],
+                    start_to_close_timeout=timedelta(seconds=cfg.limits.build_timeout_sec),
+                )
+                artifact = installed["artifact"]
+                spec = installed["spec"]
+                bus.log_state_transition(current_state, CellState.VERIFYING)
+                current_state = CellState.VERIFYING
+                verifier_result = await workflow.execute_activity(
+                    "run_verifier",
+                    args=[artifact, spec, cfg.sandbox.model_dump(mode="json")],
+                    start_to_close_timeout=timedelta(seconds=cfg.limits.verify_timeout_sec),
+                )
+                if verifier_result["passed"]:
+                    if artifact["name"] not in tools:
+                        tools.append(artifact["name"])
+                    dynamic_tools.append(artifact["name"])
+                    bus.emit(
+                        CellMessage(
+                            id=f"msg_public_{len(bus.get_log())}",
+                            timestamp=workflow.now(),
+                            source_agent=AgentRole.RUNTIME,
+                            target_agent=AgentRole.EXECUTOR,
+                            message_type=MessageType.TOOL_READY,
+                            payload={"tool_id": artifact["name"], "source": "public_library"},
+                            correlation_id=f"tool-{blockers_encountered}",
+                        )
+                    )
+                    bus.log_state_transition(current_state, CellState.EXECUTING)
+                    current_state = CellState.EXECUTING
+                    continue
+                result_payload = {
+                    "status": "escalated",
+                    "reason": verifier_result.get("failure_report", "Installed public tool failed verification"),
+                }
+                reasoning_summary = "The public tool was installed but failed local verification."
                 completion_status = CompletionStatus.INCONCLUSIVE
                 return finish(CellState.ESCALATED, reasoning_summary)
 

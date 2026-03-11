@@ -4,7 +4,7 @@ import importlib
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from cell.types import ToolArtifact, ToolDescription
+from cell.types import TestCase, ToolArtifact, ToolDescription, ToolSpec
 
 
 @dataclass(frozen=True)
@@ -18,12 +18,21 @@ class StaticTool:
     entry_point: str
 
 
+@dataclass(frozen=True)
+class ToolPackage:
+    artifact: ToolArtifact
+    spec: ToolSpec
+    origin: str
+
+
 class ToolRegistry:
-    """Manages static (pre-verified) and dynamic (runtime-built) tools."""
+    """Manages static, shared dynamic, and public tools."""
+
+    _shared_dynamic: dict[str, ToolPackage] = {}
+    _public_library: dict[str, ToolPackage] = {}
 
     def __init__(self, static_tools: list[str]):
         self._static: dict[str, StaticTool] = {}
-        self._dynamic: dict[str, ToolArtifact] = {}
         self._load_static(static_tools)
 
     def _load_static(self, static_tools: list[str]) -> None:
@@ -54,25 +63,79 @@ class ToolRegistry:
         ]
         descriptions.extend(
             ToolDescription(
-                tool_id=artifact.name,
-                name=artifact.name,
-                description=f"Dynamically built tool {artifact.name}",
-                input_schema={},
-                output_schema={},
+                tool_id=package.artifact.name,
+                name=package.artifact.name,
+                description=package.spec.description,
+                input_schema=package.spec.input_schema,
+                output_schema=package.spec.output_schema,
                 is_dynamic=True,
             )
-            for artifact in self._dynamic.values()
+            for package in self._shared_dynamic.values()
         )
         return descriptions
 
-    def register_dynamic(self, artifact: ToolArtifact) -> str:
-        self._dynamic[artifact.name] = artifact
+    def register_dynamic(self, artifact: ToolArtifact, spec: ToolSpec | None = None) -> str:
+        package = ToolPackage(
+            artifact=artifact,
+            spec=spec
+            or ToolSpec(
+                name=artifact.name,
+                description=f"Dynamically built tool {artifact.name}",
+                input_schema={"type": "object"},
+                output_schema={"type": "object"},
+                test_cases=_placeholder_cases(),
+                edge_cases=_placeholder_edge_cases(),
+                constraints=["pure"],
+            ),
+            origin="dynamic",
+        )
+        self._shared_dynamic[artifact.name] = package
         return artifact.name
 
     def get(self, tool_id: str) -> StaticTool | ToolArtifact:
         if tool_id in self._static:
             return self._static[tool_id]
-        if tool_id in self._dynamic:
-            return self._dynamic[tool_id]
+        if tool_id in self._shared_dynamic:
+            return self._shared_dynamic[tool_id].artifact
         raise KeyError(f"Unknown tool: {tool_id}")
 
+    def get_package(self, tool_id: str) -> ToolPackage | None:
+        if tool_id in self._shared_dynamic:
+            return self._shared_dynamic[tool_id]
+        if tool_id in self._public_library:
+            return self._public_library[tool_id]
+        return None
+
+    def is_local_tool(self, tool_id: str) -> bool:
+        return tool_id in self._static or tool_id in self._shared_dynamic
+
+    @classmethod
+    def register_public_package(cls, tool_id: str, artifact: ToolArtifact, spec: ToolSpec) -> None:
+        cls._public_library[tool_id] = ToolPackage(artifact=artifact, spec=spec, origin="public")
+
+    @classmethod
+    def install_public_package(cls, tool_id: str) -> ToolPackage:
+        if tool_id not in cls._public_library:
+            raise KeyError(f"Unknown public tool: {tool_id}")
+        package = cls._public_library[tool_id]
+        cls._shared_dynamic[package.artifact.name] = ToolPackage(
+            artifact=package.artifact,
+            spec=package.spec,
+            origin="installed_public",
+        )
+        return cls._shared_dynamic[package.artifact.name]
+
+
+def _placeholder_cases() -> list[TestCase]:
+    return [
+        TestCase(description="placeholder-one", input={}, expected_output={}),
+        TestCase(description="placeholder-two", input={}, expected_output={}),
+        TestCase(description="placeholder-three", input={}, expected_output={}),
+    ]
+
+
+def _placeholder_edge_cases() -> list[TestCase]:
+    return [
+        TestCase(description="placeholder-edge-one", input={}, expected_output={}),
+        TestCase(description="placeholder-edge-two", input={}, expected_output={}),
+    ]

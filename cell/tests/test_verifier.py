@@ -130,3 +130,24 @@ async def test_fuzz_inputs_do_not_crash_valid_tool() -> None:
     assert fuzz_results
     assert all(result.passed for result in fuzz_results)
 
+
+async def test_verifier_runs_regression_cases_for_adapted_tool() -> None:
+    agent = VerifierAgent()
+    spec = _spec().model_copy(
+        update={
+            "base_tool_id": "adder_v1",
+            "base_test_cases": [
+                TestCase(description="regression", input={"a": 2, "b": 2}, expected_output={"result": 4})
+            ],
+        }
+    )
+    artifact = ToolArtifact(
+        spec_id=spec.spec_id,
+        name="adder_v2",
+        entry_point="adder",
+        source_code="def adder(a, b):\n    return {'result': a + b}\n",
+    )
+    verdict = await agent.verify(artifact, spec, Sandbox(_policy()))
+    regression_results = [result for result in verdict.results if result.check_name.startswith("regression:")]
+    assert regression_results
+    assert all(result.passed for result in regression_results)

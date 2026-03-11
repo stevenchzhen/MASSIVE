@@ -48,6 +48,20 @@ def test_tool_build_loop_sequence() -> None:
         ensure_transition(from_state, to_state)
 
 
+def test_public_install_sequence() -> None:
+    sequence = [
+        CellState.INITIALIZING,
+        CellState.EXECUTING,
+        CellState.DIAGNOSING,
+        CellState.INSTALLING,
+        CellState.VERIFYING,
+        CellState.EXECUTING,
+        CellState.COMPLETE,
+    ]
+    for from_state, to_state in zip(sequence, sequence[1:]):
+        ensure_transition(from_state, to_state)
+
+
 def test_escalation_path_sequence() -> None:
     sequence = [
         CellState.INITIALIZING,
@@ -72,4 +86,3 @@ def test_tool_failure_path_sequence() -> None:
     ]
     for from_state, to_state in zip(sequence, sequence[1:]):
         ensure_transition(from_state, to_state)
-

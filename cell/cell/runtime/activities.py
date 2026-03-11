@@ -8,6 +8,7 @@ from cell.agents.diagnostician import DiagnosticianAgent
 from cell.agents.executor import ExecutorAgent
 from cell.agents.verifier import VerifierAgent
 from cell.models import create_adapter
+from cell.tools.registry import ToolRegistry
 from cell.tools.sandbox import Sandbox, SandboxPolicy
 from cell.types import ToolArtifact, ToolSpec
 
@@ -68,3 +69,13 @@ async def run_verifier(artifact: dict, spec: dict, sandbox_config: dict) -> dict
     )
     return result.model_dump(mode="json")
 
+
+@activity.defn(name="install_public_tool")
+async def install_public_tool(tool_id: str, static_tools: list[str]) -> dict:
+    registry = ToolRegistry(static_tools)
+    package = registry.install_public_package(tool_id)
+    return {
+        "artifact": package.artifact.model_dump(mode="json"),
+        "spec": package.spec.model_dump(mode="json"),
+        "origin": package.origin,
+    }

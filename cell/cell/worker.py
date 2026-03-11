@@ -6,7 +6,13 @@ import os
 from temporalio.client import Client
 from temporalio.worker import Worker
 
-from cell.runtime.activities import run_builder, run_diagnostician, run_executor, run_verifier
+from cell.runtime.activities import (
+    install_public_tool,
+    run_builder,
+    run_diagnostician,
+    run_executor,
+    run_verifier,
+)
 from cell.runtime.workflow import CellWorkflow
 
 
@@ -18,11 +24,10 @@ async def main() -> None:
         client,
         task_queue=task_queue,
         workflows=[CellWorkflow],
-        activities=[run_executor, run_diagnostician, run_builder, run_verifier],
+        activities=[run_executor, run_diagnostician, run_builder, run_verifier, install_public_tool],
     )
     await worker.run()
 
 
 if __name__ == "__main__":
     asyncio.run(main())
-
