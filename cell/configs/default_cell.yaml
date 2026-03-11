@@ -1,0 +1,40 @@
+cell_id: "cell_default"
+version: "1.0.0"
+models:
+  executor: "claude-sonnet-4-20250514"
+  diagnostician: "claude-sonnet-4-20250514"
+  builder: "claude-sonnet-4-20250514"
+  verifier: null
+limits:
+  max_execution_retries: 3
+  max_tool_build_retries: 2
+  max_blockers_per_task: 5
+  execution_timeout_sec: 300
+  build_timeout_sec: 120
+  verify_timeout_sec: 60
+  total_cell_timeout_sec: 1800
+static_tools:
+  - "calculator_basic"
+  - "json_parser"
+  - "csv_reader"
+  - "date_arithmetic"
+  - "statistical_tests"
+sandbox:
+  max_execution_time_sec: 30
+  max_memory_mb: 256
+  allowed_imports:
+    - "math"
+    - "json"
+    - "re"
+    - "datetime"
+    - "decimal"
+    - "collections"
+    - "statistics"
+    - "itertools"
+    - "functools"
+    - "typing"
+    - "fractions"
+cost:
+  budget_usd: 5.0
+  alert_threshold_usd: 3.0
+
