@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from cell.types import EventLogEntry, SourceRef, TaskOutput, CompletionStatus
+from cell.types import CompletionStatus, EventLogEntry, SourceRef, TaskOutput, ToolVerdict
 
 
 def build_output_envelope(
@@ -27,6 +27,7 @@ def build_output_envelope(
     total_cost_usd: float,
     event_log: list[EventLogEntry],
     state_transitions: list[str],
+    verifier_reports: list[dict[str, Any]] | list[ToolVerdict] | None = None,
     timestamp: datetime | None = None,
 ) -> TaskOutput:
     normalized_sources: list[SourceRef] = []
@@ -62,4 +63,9 @@ def build_output_envelope(
         total_cost_usd=total_cost_usd,
         event_log_ref=f"event-log://{cell_id}/{task_id}",
         state_transitions=state_transitions,
+        event_log=event_log,
+        verifier_reports=[
+            item if isinstance(item, ToolVerdict) else ToolVerdict.model_validate(item)
+            for item in (verifier_reports or [])
+        ],
     )

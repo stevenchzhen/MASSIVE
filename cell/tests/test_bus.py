@@ -20,7 +20,7 @@ def test_emit_logs_message_summary() -> None:
     log = bus.get_log()
     assert len(log) == 1
     assert log[0].payload_summary["status"] == "complete"
-    assert log[0].payload_summary["sources"] == "list[1]"
+    assert log[0].payload_summary["sources"] == [{"a": 1}]
 
 
 def test_state_transition_logged() -> None:

@@ -1,0 +1,31 @@
+instruction: "Extract the invoice number, invoice date, due date, vendor name, and total amount from the attached invoice note."
+documents:
+  - "invoice_note.txt"
+result_schema_id: "invoice_extraction"
+result_schema:
+  type: object
+  properties:
+    vendor_name:
+      type: string
+    invoice_number:
+      type: string
+    invoice_date:
+      type: string
+    due_date:
+      type: string
+    total_amount_usd:
+      type: number
+  required:
+    - vendor_name
+    - invoice_number
+    - invoice_date
+    - due_date
+    - total_amount_usd
+context:
+  output_rules:
+    - "Return ISO-like date strings exactly as they appear."
+    - "Return total_amount_usd as a number, not a formatted string."
+trust_level: standard
+allow_dynamic_tools: true
+max_cost_usd: 1.0
+

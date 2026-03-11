@@ -7,10 +7,11 @@ from uuid import uuid4
 
 from temporalio.client import Client
 
+from cell.artifacts import write_artifact_bundle
 from cell.config import CellConfig, load_cell_config
 from cell.hooks import CellHooks
 from cell.schema_registry import ResultSchemaRegistry
-from cell.types import CellEvent, CompletionStatus, Document, TaskInput, TaskOutput, utc_now
+from cell.types import CellEvent, CompletionStatus, Document, MessageType, TaskInput, TaskOutput, utc_now
 
 
 def _document_from_path(path: str | Path) -> Document:
@@ -44,6 +45,7 @@ class Cell:
         task_queue: str = "cell-task-queue",
         workflow_id: str | None = None,
         hooks: CellHooks | None = None,
+        artifacts_dir: str | Path | None = None,
     ) -> TaskOutput:
         if isinstance(instruction, TaskInput):
             task_input = instruction
@@ -71,7 +73,12 @@ class Cell:
             task_queue=task_queue,
         )
         output = TaskOutput.model_validate(raw_output)
+        if artifacts_dir is not None:
+            bundle_dir = Path(artifacts_dir)
+            output = output.model_copy(update={"event_log_ref": bundle_dir.resolve().as_uri()})
         output = await hooks.on_result(output)
+        if artifacts_dir is not None:
+            write_artifact_bundle(Path(artifacts_dir), task_input, output)
         if output.completion_status != CompletionStatus.COMPLETE:
             await hooks.on_escalation(output.result.get("reason", "Task did not complete"), output.result)
         return output
@@ -92,13 +99,36 @@ class Cell:
             data={},
         )
         output = await cls.run(instruction, workflow_id=task_id, **kwargs)
-        for from_state, to_state in zip(["initializing"] + output.state_transitions, output.state_transitions):
+        for event in output.event_log:
+            if event.event == "state_transition":
+                yield CellEvent(
+                    timestamp=event.timestamp,
+                    event_type="state_changed",
+                    cell_id=output.cell_id,
+                    task_id=output.task_id,
+                    data=event.payload_summary,
+                )
+                continue
+            if event.message_type == MessageType.BLOCKER:
+                blocker_payload = event.payload_summary.get("blocker", event.payload_summary)
+                yield CellEvent(
+                    timestamp=event.timestamp,
+                    event_type="blocker.detected",
+                    cell_id=output.cell_id,
+                    task_id=output.task_id,
+                    data=blocker_payload if isinstance(blocker_payload, dict) else {"blocker": blocker_payload},
+                )
+        for report in output.verifier_reports:
             yield CellEvent(
                 timestamp=utc_now(),
-                event_type="cell.state_changed",
+                event_type="tool.verified",
                 cell_id=output.cell_id,
                 task_id=output.task_id,
-                data={"from": from_state, "to": to_state},
+                data={
+                    "artifact_id": report.artifact_id,
+                    "spec_id": report.spec_id,
+                    "passed": report.passed,
+                },
             )
         yield CellEvent(
             timestamp=utc_now(),

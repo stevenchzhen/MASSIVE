@@ -1,0 +1,15 @@
+Invoice: INV-2048
+Vendor: Northwind Industrial Supply
+Invoice Date: 2026-02-14
+Due Date: 2026-03-15
+
+Line Items
+- Pressure valve assembly, qty 4, unit price $187.50
+- Installation kit, qty 2, unit price $42.00
+
+Subtotal: $834.00
+Tax: $66.72
+Total Due: $900.72
+
+Remit to Northwind Industrial Supply within 30 days.
+

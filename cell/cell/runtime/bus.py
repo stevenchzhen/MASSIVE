@@ -54,15 +54,19 @@ class CellBus:
         return [entry.state.value for entry in self._log if entry.event == "state_transition" and entry.state]
 
     def _summarize(self, payload: dict[str, Any]) -> dict[str, Any]:
-        summary: dict[str, Any] = {}
-        for key, value in payload.items():
-            if isinstance(value, (str, int, float, bool)) or value is None:
-                summary[key] = value
-            elif isinstance(value, list):
-                summary[key] = f"list[{len(value)}]"
-            elif isinstance(value, dict):
-                summary[key] = f"dict[{','.join(sorted(value.keys())[:5])}]"
-            else:
-                summary[key] = type(value).__name__
-        return summary
+        return {key: self._summarize_value(value) for key, value in payload.items()}
 
+    def _summarize_value(self, value: Any, depth: int = 0) -> Any:
+        if isinstance(value, str):
+            return value if len(value) <= 240 else f"{value[:237]}..."
+        if isinstance(value, (int, float, bool)) or value is None:
+            return value
+        if isinstance(value, list):
+            if depth >= 2:
+                return f"list[{len(value)}]"
+            return [self._summarize_value(item, depth + 1) for item in value[:5]]
+        if isinstance(value, dict):
+            if depth >= 3:
+                return f"dict[{','.join(sorted(value.keys())[:5])}]"
+            return {key: self._summarize_value(item, depth + 1) for key, item in value.items()}
+        return repr(value)

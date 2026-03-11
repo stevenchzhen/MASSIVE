@@ -341,6 +341,14 @@ class TaskOutput(FrozenModel):
     total_cost_usd: float = Field(ge=0.0, description="Total estimated model cost in USD.")
     event_log_ref: str = Field(description="Reference to the append-only event log.")
     state_transitions: list[str] = Field(description="Ordered state transition trace.")
+    event_log: list[EventLogEntry] = Field(
+        default_factory=list,
+        description="Structured event log captured during workflow execution.",
+    )
+    verifier_reports: list[ToolVerdict] = Field(
+        default_factory=list,
+        description="Verifier reports produced for installed or generated tools.",
+    )
 
     @field_validator("total_tokens")
     @classmethod

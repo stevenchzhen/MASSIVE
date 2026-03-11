@@ -92,6 +92,7 @@ class CellWorkflow:
         result_payload: dict[str, Any] = {}
         completion_status = CompletionStatus.INCONCLUSIVE
         confidence = 0.0
+        verifier_reports: list[dict[str, Any]] = []
         effective_budget = task.max_cost_usd if task.max_cost_usd is not None else cfg.cost.budget_usd
 
         def record_usage(result: dict[str, Any]) -> None:
@@ -102,6 +103,18 @@ class CellWorkflow:
             total_cost_usd += float(result.get("cost_usd", 0.0))
             total_latency_ms += int(result.get("latency_ms", 0))
             model_id = str(result.get("model_id", model_id))
+
+        def record_verifier_report(result: dict[str, Any]) -> None:
+            verifier_reports.append(
+                {
+                    "verdict_id": result.get("verdict_id", f"verifier-{len(verifier_reports) + 1}"),
+                    "artifact_id": result["artifact_id"],
+                    "spec_id": result["spec_id"],
+                    "passed": result["passed"],
+                    "results": result.get("results", []),
+                    "failure_report": result.get("failure_report"),
+                }
+            )
 
         def timed_out() -> bool:
             return (workflow.now() - started_at).total_seconds() > cfg.limits.total_cell_timeout_sec
@@ -134,6 +147,7 @@ class CellWorkflow:
                 total_cost_usd=total_cost_usd,
                 event_log=bus.get_log(),
                 state_transitions=bus.get_state_transitions(),
+                verifier_reports=verifier_reports,
                 timestamp=workflow.now(),
             )
             return output.model_dump(mode="json")
@@ -291,6 +305,7 @@ class CellWorkflow:
                     args=[artifact, spec, cfg.sandbox.model_dump(mode="json")],
                     start_to_close_timeout=timedelta(seconds=cfg.limits.verify_timeout_sec),
                 )
+                record_verifier_report(verifier_result)
                 if verifier_result["passed"]:
                     if artifact["name"] not in tools:
                         tools.append(artifact["name"])
@@ -355,6 +370,7 @@ class CellWorkflow:
                     args=[artifact, spec, cfg.sandbox.model_dump(mode="json")],
                     start_to_close_timeout=timedelta(seconds=cfg.limits.verify_timeout_sec),
                 )
+                record_verifier_report(verifier_result)
                 if verifier_result["passed"]:
                     tools.append(artifact["name"])
                     dynamic_tools.append(artifact["name"])
