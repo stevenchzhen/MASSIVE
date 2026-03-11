@@ -2,22 +2,29 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from cell.config import CellConfig, load_cell_config
+from cell.schema_registry import ResultSchemaRegistry
 from cell.types import (
     Blocker,
     BlockerCategory,
     CellMessage,
-    CellOutputEnvelope,
-    EvidenceItem,
+    CompletionStatus,
     MessageType,
+    SourceRef,
     TaskInput,
+    TaskOutput,
     ToolSpec,
     TestCase,
-    VerdictType,
 )
 
 
 def test_task_input_round_trip() -> None:
-    task = TaskInput(task_id="task-1", scope="analyze data", context="ctx")
+    task = TaskInput(
+        task_id="task-1",
+        instruction="analyze data",
+        input_data={"x": 1},
+        result_schema=ResultSchemaRegistry.analysis(),
+        context={"mode": "fast"},
+    )
     assert TaskInput.model_validate_json(task.model_dump_json()) == task
 
 
@@ -48,20 +55,20 @@ def test_tool_spec_requires_minimum_cases() -> None:
     assert spec.name == "tool"
 
 
-def test_output_envelope_round_trip() -> None:
-    envelope = CellOutputEnvelope(
+def test_task_output_round_trip() -> None:
+    output = TaskOutput(
         cell_id="cell-1",
         task_id="task-1",
         timestamp=datetime(2026, 3, 10, tzinfo=timezone.utc),
-        verdict={"answer": 42},
+        result={"answer": 42},
+        result_schema_id="analysis",
         confidence=0.8,
-        verdict_type=VerdictType.CONCLUSIVE,
-        evidence=[
-            EvidenceItem(
-                summary="calc",
-                content={"value": 42},
-                source="tool",
-                confidence=0.9,
+        completion_status=CompletionStatus.COMPLETE,
+        sources=[
+            SourceRef(
+                source_id="doc-1",
+                content_hash="abc123",
+                usage_description="Used to derive the answer.",
             )
         ],
         reasoning_summary="Summarized reasoning",
@@ -77,15 +84,15 @@ def test_output_envelope_round_trip() -> None:
         event_log_ref="event-log://cell-1/task-1",
         state_transitions=["executing", "complete"],
     )
-    dumped = envelope.model_dump_json()
-    assert CellOutputEnvelope.model_validate_json(dumped).verdict["answer"] == 42
+    dumped = output.model_dump_json()
+    assert TaskOutput.model_validate_json(dumped).result["answer"] == 42
 
 
 def test_cell_message_round_trip() -> None:
     message = CellMessage(
         source_agent="executor",
         target_agent="runtime",
-        message_type=MessageType.VERDICT,
+        message_type=MessageType.RESULT,
         payload={"status": "complete"},
         correlation_id="corr-1",
     )
@@ -96,4 +103,5 @@ def test_default_config_loads() -> None:
     path = Path(__file__).resolve().parents[1] / "configs" / "default_cell.yaml"
     config = load_cell_config(path)
     assert isinstance(config, CellConfig)
-    assert config.models.executor == "claude-sonnet-4-20250514"
+    assert config.topology.value == "high_trust"
+    assert config.agent("executor").model == "claude-sonnet-4-20250514"

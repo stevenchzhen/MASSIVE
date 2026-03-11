@@ -1,10 +1,17 @@
 cell_id: "cell_default"
 version: "1.0.0"
-models:
-  executor: "claude-sonnet-4-20250514"
-  diagnostician: "claude-sonnet-4-20250514"
-  builder: "claude-sonnet-4-20250514"
-  verifier: null
+topology: "high_trust"
+agents:
+  executor:
+    model: "claude-sonnet-4-20250514"
+    additional_instructions: ""
+    confidence_threshold: 0.7
+  diagnostician:
+    model: "claude-sonnet-4-20250514"
+  builder:
+    model: "claude-sonnet-4-20250514"
+  verifier:
+    model: null
 limits:
   max_execution_retries: 3
   max_tool_build_retries: 2
@@ -37,4 +44,3 @@ sandbox:
 cost:
   budget_usd: 5.0
   alert_threshold_usd: 3.0
-

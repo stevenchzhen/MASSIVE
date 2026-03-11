@@ -16,6 +16,8 @@ def create_adapter(model_config: str | dict) -> ModelAdapter:
 
     provider = model_config.get("provider")
     model = model_config.get("model")
+    if model and provider is None:
+        return create_adapter(model)
     if provider == "anthropic":
         return AnthropicAdapter(model=model)
     if provider == "openai":
@@ -33,4 +35,3 @@ __all__ = [
     "OpenAIAdapter",
     "create_adapter",
 ]
-

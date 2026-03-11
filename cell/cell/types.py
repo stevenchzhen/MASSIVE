@@ -31,7 +31,8 @@ class CellState(str, Enum):
 
 class MessageType(str, Enum):
     TASK_INPUT = "task_input"
-    VERDICT = "verdict"
+    RESULT = "result"
+    VERDICT = "result"
     BLOCKER = "blocker"
     TOOL_SPEC = "tool_spec"
     CONTEXT_REQUEST = "context_request"
@@ -49,10 +50,13 @@ class BlockerCategory(str, Enum):
     IMPOSSIBILITY = "impossibility"
 
 
-class VerdictType(str, Enum):
-    CONCLUSIVE = "conclusive"
-    QUALIFIED = "qualified"
+class CompletionStatus(str, Enum):
+    COMPLETE = "complete"
+    PARTIAL = "partial"
     INCONCLUSIVE = "inconclusive"
+
+
+VerdictType = CompletionStatus
 
 
 class AgentRole(str, Enum):
@@ -63,13 +67,64 @@ class AgentRole(str, Enum):
     RUNTIME = "runtime"
 
 
+class TrustLevel(str, Enum):
+    MINIMAL = "minimal"
+    STANDARD = "standard"
+    HIGH = "high"
+
+
+class Topology(str, Enum):
+    MINIMAL = "minimal"
+    STANDARD = "standard"
+    HIGH_TRUST = "high_trust"
+
+
+class Document(FrozenModel):
+    document_id: str = Field(
+        default_factory=lambda: f"doc_{uuid4().hex[:12]}",
+        description="Unique input document identifier.",
+    )
+    name: str = Field(description="Document display name.")
+    content: str = Field(description="Document content available to the cell.")
+    mime_type: str | None = Field(default=None, description="Optional MIME type.")
+    content_hash: str = Field(description="Stable hash of the document content.")
+
+
 class TaskInput(FrozenModel):
     task_id: str = Field(description="Unique task identifier.")
-    scope: str = Field(description="Scoped task instruction for this cell.")
-    context: str = Field(description="Context window provided to the cell.")
-    metadata: dict[str, Any] = Field(
+    instruction: str = Field(description="What the executor should do.")
+    input_data: dict[str, Any] = Field(
         default_factory=dict,
-        description="Arbitrary task metadata for tracing and downstream use.",
+        description="Arbitrary structured input for the task.",
+    )
+    input_documents: list[Document] = Field(
+        default_factory=list,
+        description="Optional document-style inputs.",
+    )
+    result_schema: dict[str, Any] = Field(
+        default_factory=lambda: {"type": "object"},
+        description="JSON Schema the task result must conform to.",
+    )
+    result_schema_id: str = Field(
+        default="custom",
+        description="Identifier of the result schema expected by the caller.",
+    )
+    context: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional execution context for the task.",
+    )
+    trust_level: TrustLevel = Field(
+        default=TrustLevel.STANDARD,
+        description="Trust profile requested by the caller.",
+    )
+    allow_dynamic_tools: bool = Field(
+        default=True,
+        description="Whether the cell may build tools dynamically.",
+    )
+    max_cost_usd: float | None = Field(
+        default=None,
+        ge=0.0,
+        description="Optional budget override for this task.",
     )
 
 
@@ -183,19 +238,13 @@ class ToolVerdict(FrozenModel):
     )
 
 
-class EvidenceItem(FrozenModel):
-    evidence_id: str = Field(
-        default_factory=lambda: f"ev_{uuid4().hex[:12]}",
-        description="Unique evidence item identifier.",
-    )
-    summary: str = Field(description="Short summary of the evidence.")
-    content: dict[str, Any] = Field(description="Structured evidence payload.")
-    source: str = Field(description="Origin of the evidence item.")
-    confidence: float = Field(
-        ge=0.0,
-        le=1.0,
-        description="Confidence score for the evidence item.",
-    )
+class SourceRef(FrozenModel):
+    source_id: str = Field(description="Identifier of the source input.")
+    content_hash: str = Field(description="Stable content hash of the source.")
+    usage_description: str = Field(description="How the source contributed to the result.")
+
+
+EvidenceItem = SourceRef
 
 
 class CellMessage(FrozenModel):
@@ -247,14 +296,15 @@ class ToolDescription(FrozenModel):
     is_dynamic: bool = Field(description="Whether the tool was created dynamically.")
 
 
-class CellOutputEnvelope(FrozenModel):
+class TaskOutput(FrozenModel):
     cell_id: str = Field(description="Cell identifier.")
     task_id: str = Field(description="Task identifier.")
-    timestamp: datetime = Field(description="Envelope creation timestamp in UTC.")
-    verdict: dict[str, Any] = Field(description="Structured verdict payload.")
-    confidence: float = Field(ge=0.0, le=1.0, description="Overall verdict confidence.")
-    verdict_type: VerdictType = Field(description="Verdict qualification category.")
-    evidence: list[EvidenceItem] = Field(description="Evidence supporting the verdict.")
+    timestamp: datetime = Field(description="Output creation timestamp in UTC.")
+    result: dict[str, Any] = Field(description="Structured task result payload.")
+    result_schema_id: str = Field(description="Schema identifier for the result.")
+    confidence: float = Field(ge=0.0, le=1.0, description="Overall task confidence.")
+    completion_status: CompletionStatus = Field(description="Completion qualification category.")
+    sources: list[SourceRef] = Field(description="Sources used to produce the result.")
     reasoning_summary: str = Field(description="Short reasoning summary for audit consumers.")
     assumptions: list[str] = Field(description="Assumptions made during execution.")
     tools_used: list[str] = Field(description="Identifiers of tools used during execution.")
@@ -262,19 +312,13 @@ class CellOutputEnvelope(FrozenModel):
         description="Identifiers of dynamic tools created during execution.",
     )
     model_id: str = Field(description="Primary model identifier used for the task.")
-    blockers_encountered: int = Field(
-        ge=0,
-        description="Number of blockers encountered during execution.",
-    )
+    blockers_encountered: int = Field(ge=0, description="Number of blockers encountered during execution.")
     retries: int = Field(ge=0, description="Total retry count across the workflow.")
     total_latency_ms: int = Field(ge=0, description="Aggregate end-to-end latency.")
-    total_tokens: dict[str, int] = Field(
-        description="Aggregate token counts, typically input/output totals.",
-    )
+    total_tokens: dict[str, int] = Field(description="Aggregate token counts.")
     total_cost_usd: float = Field(ge=0.0, description="Total estimated model cost in USD.")
     event_log_ref: str = Field(description="Reference to the append-only event log.")
     state_transitions: list[str] = Field(description="Ordered state transition trace.")
-
 
     @field_validator("total_tokens")
     @classmethod
@@ -284,9 +328,19 @@ class CellOutputEnvelope(FrozenModel):
             raise ValueError("total_tokens must include input and output keys")
         return value
 
-
     @model_validator(mode="after")
-    def validate_evidence_confidence(self) -> "CellOutputEnvelope":
-        if self.evidence and self.confidence == 0:
-            raise ValueError("confidence must be > 0 when evidence is present")
+    def validate_source_confidence(self) -> "TaskOutput":
+        if self.sources and self.confidence == 0:
+            raise ValueError("confidence must be > 0 when sources are present")
         return self
+
+
+CellOutputEnvelope = TaskOutput
+
+
+class CellEvent(FrozenModel):
+    timestamp: datetime = Field(description="Event timestamp in UTC.")
+    event_type: str = Field(description="Structured event type.")
+    cell_id: str = Field(description="Cell identifier.")
+    task_id: str = Field(description="Task identifier.")
+    data: dict[str, Any] = Field(description="Event-specific payload.")

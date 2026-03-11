@@ -4,7 +4,6 @@ from datetime import timedelta
 from typing import Any
 
 from temporalio import workflow
-
 from cell.config import CellConfig
 from cell.output.envelope import build_output_envelope
 from cell.runtime.bus import CellBus
@@ -12,10 +11,60 @@ from cell.types import (
     AgentRole,
     CellMessage,
     CellState,
+    CompletionStatus,
     MessageType,
     TaskInput,
-    VerdictType,
+    Topology,
 )
+
+
+def _render_context(task: TaskInput) -> str:
+    return str(
+        {
+            "input_data": task.input_data,
+            "input_documents": [document.model_dump(mode="json") for document in task.input_documents],
+            "context": task.context,
+            "result_schema_id": task.result_schema_id,
+        }
+    )
+
+
+def _schema_matches(value: Any, schema: dict[str, Any]) -> bool:
+    if not schema:
+        return True
+    schema_type = schema.get("type")
+    if not schema_type:
+        return True
+    if schema_type == "object":
+        if not isinstance(value, dict):
+            return False
+        required = schema.get("required", [])
+        if any(name not in value for name in required):
+            return False
+        properties = schema.get("properties", {})
+        for name, subschema in properties.items():
+            if name in value and not _schema_matches(value[name], subschema):
+                return False
+        if schema.get("additionalProperties") is False:
+            if any(name not in properties for name in value):
+                return False
+        return True
+    if schema_type == "array":
+        if not isinstance(value, list):
+            return False
+        item_schema = schema.get("items", {})
+        return all(_schema_matches(item, item_schema) for item in value)
+    if schema_type == "string":
+        return isinstance(value, str)
+    if schema_type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if schema_type == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if schema_type == "boolean":
+        return isinstance(value, bool)
+    if schema_type == "null":
+        return value is None
+    return True
 
 
 @workflow.defn(name="CellWorkflow")
@@ -36,12 +85,13 @@ class CellWorkflow:
         tools = list(cfg.static_tools)
         model_id = "deterministic"
         started_at = workflow.now()
-        last_reasoning_summary = ""
+        reasoning_summary = ""
         assumptions: list[str] = []
-        evidence: list[dict[str, Any]] = []
-        verdict: dict[str, Any] = {}
-        verdict_type = VerdictType.INCONCLUSIVE
+        sources: list[dict[str, Any]] = []
+        result_payload: dict[str, Any] = {}
+        completion_status = CompletionStatus.INCONCLUSIVE
         confidence = 0.0
+        effective_budget = task.max_cost_usd if task.max_cost_usd is not None else cfg.cost.budget_usd
 
         def record_usage(result: dict[str, Any]) -> None:
             nonlocal total_cost_usd, total_latency_ms, model_id
@@ -56,20 +106,21 @@ class CellWorkflow:
             return (workflow.now() - started_at).total_seconds() > cfg.limits.total_cell_timeout_sec
 
         def budget_exceeded() -> bool:
-            return total_cost_usd > cfg.cost.budget_usd
+            return total_cost_usd > effective_budget
 
         def finish(final_state: CellState, summary: str) -> dict:
             nonlocal current_state
             if current_state != final_state:
                 bus.log_state_transition(current_state, final_state)
                 current_state = final_state
-            envelope = build_output_envelope(
+            output = build_output_envelope(
                 cell_id=cfg.cell_id,
                 task_id=task.task_id,
-                verdict=verdict or {"status": final_state.value},
+                result=result_payload or {"status": final_state.value},
+                result_schema_id=task.result_schema_id,
                 confidence=confidence,
-                verdict_type=verdict_type,
-                evidence=evidence,
+                completion_status=completion_status,
+                sources=sources,
                 reasoning_summary=summary,
                 assumptions=assumptions,
                 tools_used=tools,
@@ -84,26 +135,33 @@ class CellWorkflow:
                 state_transitions=bus.get_state_transitions(),
                 timestamp=workflow.now(),
             )
-            return envelope.model_dump(mode="json")
+            return output.model_dump(mode="json")
 
         bus.log_state_transition(current_state, CellState.EXECUTING)
         current_state = CellState.EXECUTING
 
         while True:
             if timed_out():
-                verdict = {"status": "escalated", "reason": "Total cell timeout exceeded"}
-                last_reasoning_summary = "Workflow exceeded the configured total cell timeout."
-                return finish(CellState.ESCALATED, last_reasoning_summary)
+                result_payload = {"status": "escalated", "reason": "Total cell timeout exceeded"}
+                reasoning_summary = "Workflow exceeded the configured total cell timeout."
+                completion_status = CompletionStatus.INCONCLUSIVE
+                return finish(CellState.ESCALATED, reasoning_summary)
 
             executor_result = await workflow.execute_activity(
                 "run_executor",
-                args=[task.model_dump(mode="json"), tools, cfg.models.executor, task.context],
+                args=[
+                    task.model_dump(mode="json"),
+                    tools,
+                    cfg.agent("executor").model_dump(mode="json"),
+                    _render_context(task),
+                ],
                 start_to_close_timeout=timedelta(seconds=cfg.limits.execution_timeout_sec),
             )
             if timed_out():
-                verdict = {"status": "escalated", "reason": "Total cell timeout exceeded"}
-                last_reasoning_summary = "Workflow exceeded the configured total cell timeout."
-                return finish(CellState.ESCALATED, last_reasoning_summary)
+                result_payload = {"status": "escalated", "reason": "Total cell timeout exceeded"}
+                reasoning_summary = "Workflow exceeded the configured total cell timeout."
+                completion_status = CompletionStatus.INCONCLUSIVE
+                return finish(CellState.ESCALATED, reasoning_summary)
             record_usage(executor_result)
             bus.emit(
                 CellMessage(
@@ -111,97 +169,119 @@ class CellWorkflow:
                     timestamp=workflow.now(),
                     source_agent=AgentRole.EXECUTOR,
                     target_agent=AgentRole.RUNTIME,
-                    message_type=MessageType.VERDICT
-                    if executor_result["status"] == "complete"
-                    else MessageType.BLOCKER,
+                    message_type=MessageType.RESULT if executor_result["status"] == "complete" else MessageType.BLOCKER,
                     payload=executor_result["payload"],
                     correlation_id=f"exec-{blockers_encountered}",
                 )
             )
             if budget_exceeded():
-                verdict = {"status": "escalated", "reason": "Budget exceeded"}
-                last_reasoning_summary = "Workflow exceeded the configured budget after an agent call."
-                verdict_type = VerdictType.INCONCLUSIVE
+                result_payload = {"status": "escalated", "reason": "Budget exceeded"}
+                reasoning_summary = "Workflow exceeded the configured budget after an agent call."
+                completion_status = CompletionStatus.INCONCLUSIVE
                 confidence = 0.0
-                return finish(CellState.ESCALATED, last_reasoning_summary)
+                return finish(CellState.ESCALATED, reasoning_summary)
 
             if executor_result["status"] == "complete":
                 payload = executor_result["payload"]
-                verdict = payload.get("findings", {})
+                candidate_result = payload.get("result", {})
+                if not _schema_matches(candidate_result, task.result_schema):
+                    result_payload = {
+                        "status": "error",
+                        "reason": "Executor result failed result_schema validation",
+                    }
+                    reasoning_summary = "Executor produced output that did not match the caller-defined result schema."
+                    completion_status = CompletionStatus.INCONCLUSIVE
+                    return finish(CellState.ERROR, reasoning_summary)
+                result_payload = candidate_result
                 confidence = float(payload.get("confidence", 0.0))
-                evidence = payload.get("evidence", [])
+                sources = payload.get("sources", [])
                 assumptions = payload.get("assumptions", [])
-                verdict_type = (
-                    VerdictType.CONCLUSIVE if confidence >= 0.85 else VerdictType.QUALIFIED
-                )
-                last_reasoning_summary = "Executor completed the scoped task."
-                return finish(CellState.COMPLETE, last_reasoning_summary)
+                completion_status = CompletionStatus(payload.get("completion_status", "complete"))
+                reasoning_summary = "Executor completed the scoped task."
+                return finish(CellState.COMPLETE, reasoning_summary)
 
             if executor_result["status"] == "error":
-                verdict = {"status": "error", "reason": executor_result["payload"]["error"]}
-                last_reasoning_summary = "Executor returned an error."
-                return finish(CellState.ERROR, last_reasoning_summary)
+                result_payload = {"status": "error", "reason": executor_result["payload"]["error"]}
+                reasoning_summary = "Executor returned an error."
+                completion_status = CompletionStatus.INCONCLUSIVE
+                return finish(CellState.ERROR, reasoning_summary)
 
             blockers_encountered += 1
             if blockers_encountered > cfg.limits.max_blockers_per_task:
-                verdict = {"status": "escalated", "reason": "Max blockers exceeded"}
-                last_reasoning_summary = "Executor encountered too many blockers."
-                return finish(CellState.ESCALATED, last_reasoning_summary)
+                result_payload = {"status": "escalated", "reason": "Max blockers exceeded"}
+                reasoning_summary = "Executor encountered too many blockers."
+                completion_status = CompletionStatus.INCONCLUSIVE
+                return finish(CellState.ESCALATED, reasoning_summary)
+            if not task.allow_dynamic_tools:
+                result_payload = {"status": "escalated", "reason": "Dynamic tools disabled for this task"}
+                reasoning_summary = "Executor encountered a blocker but dynamic tool creation is disabled."
+                completion_status = CompletionStatus.INCONCLUSIVE
+                return finish(CellState.ESCALATED, reasoning_summary)
 
-            bus.log_state_transition(current_state, CellState.DIAGNOSING)
-            current_state = CellState.DIAGNOSING
+            planning_state = CellState.DIAGNOSING if cfg.topology == Topology.HIGH_TRUST else CellState.BUILDING
+            bus.log_state_transition(current_state, planning_state)
+            current_state = planning_state
             diagnosis = await workflow.execute_activity(
                 "run_diagnostician",
-                args=[executor_result["payload"]["blocker"], cfg.models.diagnostician],
+                args=[executor_result["payload"]["blocker"], cfg.agent(cfg.planner_role()).model_dump(mode="json")],
                 start_to_close_timeout=timedelta(seconds=cfg.limits.execution_timeout_sec),
             )
             if timed_out():
-                verdict = {"status": "escalated", "reason": "Total cell timeout exceeded"}
-                last_reasoning_summary = "Workflow exceeded the configured total cell timeout."
-                return finish(CellState.ESCALATED, last_reasoning_summary)
+                result_payload = {"status": "escalated", "reason": "Total cell timeout exceeded"}
+                reasoning_summary = "Workflow exceeded the configured total cell timeout."
+                completion_status = CompletionStatus.INCONCLUSIVE
+                return finish(CellState.ESCALATED, reasoning_summary)
             record_usage(diagnosis)
             if budget_exceeded():
-                verdict = {"status": "escalated", "reason": "Budget exceeded"}
-                last_reasoning_summary = "Budget exceeded during blocker diagnosis."
-                return finish(CellState.ESCALATED, last_reasoning_summary)
+                result_payload = {"status": "escalated", "reason": "Budget exceeded"}
+                reasoning_summary = "Budget exceeded during blocker handling."
+                completion_status = CompletionStatus.INCONCLUSIVE
+                return finish(CellState.ESCALATED, reasoning_summary)
 
             action = diagnosis["payload"]["action"]
             if action == "escalate":
-                verdict = {"status": "escalated", "reason": diagnosis["payload"]["escalation_reason"]}
-                last_reasoning_summary = "Diagnostician escalated the blocker."
-                return finish(CellState.ESCALATED, last_reasoning_summary)
+                result_payload = {"status": "escalated", "reason": diagnosis["payload"]["escalation_reason"]}
+                reasoning_summary = "The blocker was escalated."
+                completion_status = CompletionStatus.INCONCLUSIVE
+                return finish(CellState.ESCALATED, reasoning_summary)
             if action == "context_request":
-                bus.log_state_transition(current_state, CellState.WAIT_HUMAN)
-                current_state = CellState.WAIT_HUMAN
-                verdict = {"status": "escalated", "reason": diagnosis["payload"]["context_needed"]}
-                last_reasoning_summary = "Diagnostician requested additional context unavailable inside the cell."
-                return finish(CellState.ESCALATED, last_reasoning_summary)
+                if current_state != CellState.WAIT_HUMAN:
+                    bus.log_state_transition(current_state, CellState.WAIT_HUMAN)
+                    current_state = CellState.WAIT_HUMAN
+                result_payload = {"status": "escalated", "reason": diagnosis["payload"]["context_needed"]}
+                reasoning_summary = "Additional context is required to continue."
+                completion_status = CompletionStatus.INCONCLUSIVE
+                return finish(CellState.ESCALATED, reasoning_summary)
 
             spec = diagnosis["payload"]["tool_spec"]
             previous_failure: dict[str, Any] | None = None
             build_attempts = 0
-            bus.log_state_transition(current_state, CellState.BUILDING)
-            current_state = CellState.BUILDING
+            if current_state != CellState.BUILDING:
+                bus.log_state_transition(current_state, CellState.BUILDING)
+                current_state = CellState.BUILDING
             while True:
                 if timed_out():
-                    verdict = {"status": "escalated", "reason": "Total cell timeout exceeded"}
-                    last_reasoning_summary = "Workflow timed out during tool building."
-                    return finish(CellState.ESCALATED, last_reasoning_summary)
+                    result_payload = {"status": "escalated", "reason": "Total cell timeout exceeded"}
+                    reasoning_summary = "Workflow timed out during tool building."
+                    completion_status = CompletionStatus.INCONCLUSIVE
+                    return finish(CellState.ESCALATED, reasoning_summary)
 
                 builder_result = await workflow.execute_activity(
                     "run_builder",
-                    args=[spec, cfg.models.builder, previous_failure],
+                    args=[spec, cfg.agent(cfg.builder_role()).model_dump(mode="json"), previous_failure],
                     start_to_close_timeout=timedelta(seconds=cfg.limits.build_timeout_sec),
                 )
                 record_usage(builder_result)
                 if budget_exceeded():
-                    verdict = {"status": "escalated", "reason": "Budget exceeded"}
-                    last_reasoning_summary = "Budget exceeded during tool build."
-                    return finish(CellState.ESCALATED, last_reasoning_summary)
+                    result_payload = {"status": "escalated", "reason": "Budget exceeded"}
+                    reasoning_summary = "Budget exceeded during tool build."
+                    completion_status = CompletionStatus.INCONCLUSIVE
+                    return finish(CellState.ESCALATED, reasoning_summary)
                 if builder_result["status"] != "complete":
-                    verdict = {"status": "error", "reason": builder_result["payload"].get("error", "build failed")}
-                    last_reasoning_summary = "Builder returned an error."
-                    return finish(CellState.ERROR, last_reasoning_summary)
+                    result_payload = {"status": "error", "reason": builder_result["payload"].get("error", "build failed")}
+                    reasoning_summary = "Builder returned an error."
+                    completion_status = CompletionStatus.INCONCLUSIVE
+                    return finish(CellState.ERROR, reasoning_summary)
 
                 bus.log_state_transition(current_state, CellState.VERIFYING)
                 current_state = CellState.VERIFYING
@@ -238,12 +318,13 @@ class CellWorkflow:
                 if build_attempts >= cfg.limits.max_tool_build_retries:
                     bus.log_state_transition(current_state, CellState.TOOL_FAILED)
                     current_state = CellState.TOOL_FAILED
-                    verdict = {
+                    result_payload = {
                         "status": "escalated",
                         "reason": verifier_result.get("failure_report", "Tool verification failed"),
                     }
-                    last_reasoning_summary = "Dynamic tool build exhausted retries."
-                    return finish(CellState.ESCALATED, last_reasoning_summary)
+                    reasoning_summary = "Dynamic tool build exhausted retries."
+                    completion_status = CompletionStatus.INCONCLUSIVE
+                    return finish(CellState.ESCALATED, reasoning_summary)
 
                 bus.emit(
                     CellMessage(

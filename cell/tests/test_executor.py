@@ -2,6 +2,7 @@ import json
 
 from cell.agents.base import AgentInput
 from cell.agents.executor import ExecutorAgent
+from cell.schema_registry import ResultSchemaRegistry
 from cell.types import Blocker
 
 
@@ -13,8 +14,15 @@ async def test_executor_returns_complete(mock_model_factory) -> None:
                     {
                         "status": "complete",
                         "confidence": 0.91,
-                        "findings": {"answer": 42},
-                        "evidence": [{"summary": "calc"}],
+                        "completion_status": "complete",
+                        "result": {"summary": "done", "key_findings": ["x"]},
+                        "sources": [
+                            {
+                                "source_id": "doc-1",
+                                "content_hash": "abc123",
+                                "usage_description": "Provided the finding.",
+                            }
+                        ],
                         "assumptions": ["input is accurate"],
                     }
                 )
@@ -23,16 +31,21 @@ async def test_executor_returns_complete(mock_model_factory) -> None:
     )
     result = await agent.invoke(
         AgentInput(
-            payload={"scope": "Calculate 6*7"},
+            payload={
+                "instruction": "Summarize the dataset",
+                "input_data": {"rows": 10},
+                "result_schema": ResultSchemaRegistry.analysis(),
+                "context": {},
+            },
             tools=["calculator_basic"],
-            context_window="Math task",
-            config={},
+            context_window="Analysis task",
+            config={"confidence_threshold": 0.7},
         )
     )
     assert result.status == "complete"
     assert result.payload["confidence"] == 0.91
-    assert result.payload["findings"] == {"answer": 42}
-    assert result.payload["evidence"] == [{"summary": "calc"}]
+    assert result.payload["result"]["summary"] == "done"
+    assert result.payload["sources"][0]["source_id"] == "doc-1"
 
 
 async def test_executor_returns_blocker(mock_model_factory) -> None:
@@ -57,9 +70,13 @@ async def test_executor_returns_blocker(mock_model_factory) -> None:
         )
     )
     result = await agent.invoke(
-        AgentInput(payload={"scope": "Parse text"}, tools=[], context_window="ctx", config={})
+        AgentInput(
+            payload={"instruction": "Parse text", "result_schema": {"type": "object"}},
+            tools=[],
+            context_window="ctx",
+            config={},
+        )
     )
     assert result.status == "blocker"
     blocker = Blocker.model_validate(result.payload["blocker"])
     assert blocker.category.value == "missing_capability"
-

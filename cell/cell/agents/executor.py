@@ -7,22 +7,45 @@ from cell.models.base import parse_json_content
 from cell.types import Blocker
 
 
+EXECUTOR_SYSTEM_TEMPLATE = """
+You are an executor agent within a CellForge cell.
+
+Your task: {instruction}
+
+Your available tools:
+{tools_description}
+
+Your output must conform to this JSON schema:
+{result_schema}
+
+CRITICAL RULES:
+- If your confidence in any step drops below {confidence_threshold}, emit a blocker signal instead of proceeding.
+- If you attempt the same approach twice without progress, emit a blocker signal.
+- Do not guess. Do not fabricate results.
+- If you cannot complete the task, say so explicitly.
+
+Scoped context:
+{context}
+
+{additional_instructions}
+""".strip()
+
+
 class ExecutorAgent(Agent):
     async def invoke(self, input: AgentInput) -> AgentOutput:
         tool_lines = "\n".join(f"- {tool}" for tool in input.tools) or "- none"
         context = input.context_window.strip() or "No additional context provided."
-        system_prompt = (
-            "You are the Executor agent for a verification cell.\n"
-            "Role: perform the assigned analytical task using only the available verified tools.\n"
-            "Output: respond with JSON only and match the required schema.\n"
-            "Blocker protocol: If your confidence in any step drops below 0.7, or if you attempt the same "
-            "approach twice without progress, you MUST respond with status 'blocker' and a complete blocker "
-            "object. Do not guess. Do not fabricate results.\n"
-            "Available tools:\n"
-            f"{tool_lines}\n"
-            "Scoped context:\n"
-            f"{context}"
+        confidence_threshold = input.config.get("confidence_threshold", 0.7)
+        system_prompt = EXECUTOR_SYSTEM_TEMPLATE.format(
+            instruction=input.payload.get("instruction") or str(input.payload),
+            tools_description=tool_lines,
+            result_schema=input.payload.get("result_schema", {"type": "object"}),
+            confidence_threshold=confidence_threshold,
+            context=context,
+            additional_instructions=input.config.get("additional_instructions", "").strip()
+            or "No additional instructions.",
         )
+        result_schema = input.payload.get("result_schema", {"type": "object"})
         response_format = {
             "type": "json_schema",
             "json_schema": {
@@ -32,8 +55,23 @@ class ExecutorAgent(Agent):
                     "properties": {
                         "status": {"type": "string", "enum": ["complete", "blocker"]},
                         "confidence": {"type": "number"},
-                        "findings": {"type": "object"},
-                        "evidence": {"type": "array"},
+                        "completion_status": {
+                            "type": "string",
+                            "enum": ["complete", "partial", "inconclusive"],
+                        },
+                        "result": result_schema,
+                        "sources": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "source_id": {"type": "string"},
+                                    "content_hash": {"type": "string"},
+                                    "usage_description": {"type": "string"},
+                                },
+                                "required": ["source_id", "content_hash", "usage_description"],
+                            },
+                        },
                         "assumptions": {"type": "array", "items": {"type": "string"}},
                         "blocker": {"type": "object"},
                     },
@@ -41,8 +79,14 @@ class ExecutorAgent(Agent):
                 },
             },
         }
+        prompt_payload = {
+            "instruction": input.payload.get("instruction"),
+            "input_data": input.payload.get("input_data", {}),
+            "input_documents": input.payload.get("input_documents", []),
+            "context": input.payload.get("context", {}),
+        }
         result = await self.model.complete(
-            messages=[{"role": "user", "content": input.payload.get("scope") or str(input.payload)}],
+            messages=[{"role": "user", "content": str(prompt_payload)}],
             system=system_prompt,
             temperature=0.0,
             max_tokens=4096,
@@ -87,4 +131,3 @@ class ExecutorAgent(Agent):
             latency_ms=result.latency_ms,
             cost_usd=result.cost_usd,
         )
-

@@ -12,15 +12,15 @@ def test_emit_logs_message_summary() -> None:
         CellMessage(
             source_agent=AgentRole.EXECUTOR,
             target_agent=AgentRole.RUNTIME,
-            message_type=MessageType.VERDICT,
-            payload={"status": "complete", "evidence": [{"a": 1}]},
+            message_type=MessageType.RESULT,
+            payload={"status": "complete", "sources": [{"a": 1}]},
             correlation_id="corr-1",
         )
     )
     log = bus.get_log()
     assert len(log) == 1
     assert log[0].payload_summary["status"] == "complete"
-    assert log[0].payload_summary["evidence"] == "list[1]"
+    assert log[0].payload_summary["sources"] == "list[1]"
 
 
 def test_state_transition_logged() -> None:

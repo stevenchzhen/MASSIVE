@@ -3,17 +3,18 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from cell.types import CellOutputEnvelope, EvidenceItem, EventLogEntry, VerdictType
+from cell.types import EventLogEntry, SourceRef, TaskOutput, CompletionStatus
 
 
 def build_output_envelope(
     *,
     cell_id: str,
     task_id: str,
-    verdict: dict[str, Any],
+    result: dict[str, Any],
+    result_schema_id: str,
     confidence: float,
-    verdict_type: VerdictType,
-    evidence: list[dict[str, Any]] | list[EvidenceItem],
+    completion_status: CompletionStatus,
+    sources: list[dict[str, Any]] | list[SourceRef],
     reasoning_summary: str,
     assumptions: list[str],
     tools_used: list[str],
@@ -27,29 +28,28 @@ def build_output_envelope(
     event_log: list[EventLogEntry],
     state_transitions: list[str],
     timestamp: datetime | None = None,
-) -> CellOutputEnvelope:
-    normalized_evidence: list[EvidenceItem] = []
-    for index, item in enumerate(evidence):
-        if isinstance(item, EvidenceItem):
-            normalized_evidence.append(item)
+) -> TaskOutput:
+    normalized_sources: list[SourceRef] = []
+    for index, item in enumerate(sources):
+        if isinstance(item, SourceRef):
+            normalized_sources.append(item)
             continue
-        normalized_evidence.append(
-            EvidenceItem(
-                evidence_id=str(item.get("evidence_id", f"ev_{index:04d}")),
-                summary=str(item.get("summary", "evidence")),
-                content=item,
-                source=str(item.get("source", "executor")),
-                confidence=float(item.get("confidence", confidence)),
+        normalized_sources.append(
+            SourceRef(
+                source_id=str(item.get("source_id", f"src_{index:04d}")),
+                content_hash=str(item.get("content_hash", "")),
+                usage_description=str(item.get("usage_description", "Used during task execution.")),
             )
         )
-    return CellOutputEnvelope(
+    return TaskOutput(
         cell_id=cell_id,
         task_id=task_id,
         timestamp=timestamp or datetime.now(timezone.utc),
-        verdict=verdict,
+        result=result,
+        result_schema_id=result_schema_id,
         confidence=confidence,
-        verdict_type=verdict_type,
-        evidence=normalized_evidence,
+        completion_status=completion_status,
+        sources=normalized_sources,
         reasoning_summary=reasoning_summary,
         assumptions=assumptions,
         tools_used=tools_used,

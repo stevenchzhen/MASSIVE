@@ -8,6 +8,7 @@ VALID_TRANSITIONS: dict[CellState, set[CellState]] = {
     CellState.EXECUTING: {
         CellState.COMPLETE,
         CellState.DIAGNOSING,
+        CellState.BUILDING,
         CellState.ERROR,
         CellState.ESCALATED,
     },
@@ -43,4 +44,3 @@ def validate_transition(from_state: CellState, to_state: CellState) -> bool:
 def ensure_transition(from_state: CellState, to_state: CellState) -> None:
     if not validate_transition(from_state, to_state):
         raise ValueError(f"Invalid state transition: {from_state.value} -> {to_state.value}")
-

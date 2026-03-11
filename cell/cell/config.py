@@ -4,10 +4,12 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from cell.types import Topology
 
 
-class ModelsConfig(BaseModel):
+class LegacyModelsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     executor: str = Field(description="Model ID for the executor agent.")
@@ -17,6 +19,33 @@ class ModelsConfig(BaseModel):
         default=None,
         description="Model ID for the verifier if ever made non-deterministic.",
     )
+
+
+class AgentConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    model: str | None = Field(default=None, description="Model identifier for the agent.")
+    additional_instructions: str = Field(
+        default="",
+        description="Optional extra role instructions.",
+    )
+    confidence_threshold: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="Threshold below which the executor must block.",
+    )
+
+
+class AgentsConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    executor: AgentConfig
+    diagnostician: AgentConfig | None = None
+    builder: AgentConfig | None = None
+    verifier: AgentConfig | None = None
+    diagnostician_builder: AgentConfig | None = None
+    builder_verifier: AgentConfig | None = None
 
 
 class LimitsConfig(BaseModel):
@@ -65,11 +94,57 @@ class CellConfig(BaseModel):
 
     cell_id: str = Field(description="Unique cell identifier.")
     version: str = Field(description="Cell implementation version.")
-    models: ModelsConfig = Field(description="Model configuration by agent role.")
+    topology: Topology = Field(default=Topology.HIGH_TRUST)
+    agents: AgentsConfig | None = Field(
+        default=None,
+        description="Agent topology and model configuration.",
+    )
+    models: LegacyModelsConfig | None = Field(
+        default=None,
+        description="Backward-compatible legacy model configuration.",
+    )
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
     static_tools: list[str] = Field(description="Static tool identifiers to preload.")
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     cost: CostConfig = Field(default_factory=CostConfig)
+
+    @model_validator(mode="after")
+    def normalize_agents(self) -> "CellConfig":
+        if self.agents is not None:
+            return self
+        if self.models is None:
+            raise ValueError("Either agents or models must be configured")
+        object.__setattr__(
+            self,
+            "agents",
+            AgentsConfig(
+                executor=AgentConfig(model=self.models.executor),
+                diagnostician=AgentConfig(model=self.models.diagnostician),
+                builder=AgentConfig(model=self.models.builder),
+                verifier=AgentConfig(model=self.models.verifier),
+            ),
+        )
+        return self
+
+    def agent(self, role: str) -> AgentConfig:
+        agent = getattr(self.agents, role)
+        if agent is None:
+            raise KeyError(f"Agent role {role!r} is not configured for topology {self.topology.value}")
+        return agent
+
+    def planner_role(self) -> str:
+        if self.topology == Topology.HIGH_TRUST:
+            return "diagnostician"
+        if self.topology == Topology.STANDARD:
+            return "diagnostician_builder"
+        return "builder_verifier"
+
+    def builder_role(self) -> str:
+        if self.topology == Topology.HIGH_TRUST:
+            return "builder"
+        if self.topology == Topology.STANDARD:
+            return "diagnostician_builder"
+        return "builder_verifier"
 
 
 def load_cell_config(path: str | Path) -> CellConfig:
