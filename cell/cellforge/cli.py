@@ -12,14 +12,17 @@ import httpx
 import yaml
 
 from cell import ResultSchemaRegistry, load_cell_config
-from cell.dev import repo_root, run_dev_server, temporal_connectivity
+from cell.dev import (
+    default_config_path,
+    ensure_local_stack,
+    provider_diagnostics,
+    repo_root,
+    run_dev_server,
+    temporal_connectivity,
+)
 from cell.tools.registry import ToolRegistry
 
 from .api import CellForge
-
-
-def default_config_path() -> Path:
-    return repo_root() / "cell" / "configs" / "default_cell.yaml"
 
 
 def examples_root() -> Path:
@@ -46,10 +49,12 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser = subparsers.add_parser("doctor", help="Validate local setup.")
     doctor_parser.add_argument("--config", default=str(default_config_path()))
     doctor_parser.add_argument("--host", default=os.getenv("CELLFORGE_TEMPORAL_HOST", os.getenv("TEMPORAL_HOST", "localhost:7233")))
+    doctor_parser.add_argument("--no-fix", action="store_true", help="Do not attempt to start the local Temporal stack automatically.")
 
     dev_parser = subparsers.add_parser("dev", help="Start the local worker against a local Temporal stack.")
     dev_parser.add_argument("--host", default=os.getenv("CELLFORGE_TEMPORAL_HOST", os.getenv("TEMPORAL_HOST", "localhost:7233")))
     dev_parser.add_argument("--task-queue", default=os.getenv("CELLFORGE_TASK_QUEUE", os.getenv("TEMPORAL_TASK_QUEUE", "cell-task-queue")))
+    dev_parser.add_argument("--config", default=str(default_config_path()))
     dev_parser.add_argument("--no-start", action="store_true")
     return parser
 
@@ -81,7 +86,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "doctor":
         return asyncio.run(doctor_command(args))
     if args.command == "dev":
-        return asyncio.run(run_dev_server(args.host, args.task_queue, auto_start=not args.no_start))
+        return asyncio.run(run_dev_server(args.host, args.task_queue, auto_start=not args.no_start, config_path=args.config))
     raise AssertionError(f"Unhandled command: {args.command}")
 
 
@@ -178,53 +183,38 @@ async def doctor_command(args: argparse.Namespace) -> int:
         print(f"  config      FAIL: {config_path} ({exc})")
         return 1
 
-    ok, message = await temporal_connectivity(args.host)
+    if args.no_fix:
+        ok, message = await temporal_connectivity(args.host)
+    else:
+        ok, message = await ensure_local_stack(args.host)
     if ok:
         print(f"  temporal    OK: {message}")
     else:
         failures += 1
         print(f"  temporal    FAIL: {message}")
-        print("               Start it with `cellforge dev` or `docker compose up -d postgres temporal temporal-ui`.")
+        if args.no_fix:
+            print("               Retry without `--no-fix`, run `cellforge dev`, or start `docker compose up -d postgres temporal temporal-ui`.")
+        else:
+            print("               Auto-fix was attempted. If this host should stay remote, point --host or CELLFORGE_TEMPORAL_HOST at that cluster instead.")
 
-    for label, status, detail in provider_checks(cfg):
+    for label, status, detail, hints in provider_checks(cfg):
         if status == "FAIL":
             failures += 1
         print(f"  {label:11} {status}: {detail}")
+        for hint in hints:
+            print(f"               {hint}")
 
     return 1 if failures else 0
 
 
-def provider_checks(cfg) -> list[tuple[str, str, str]]:
-    checks: list[tuple[str, str, str]] = []
-    for role_name in sorted(cfg.agents.model_dump(exclude_none=True)):
-        agent = getattr(cfg.agents, role_name)
-        model = getattr(agent, "model", None)
-        if not model:
-            checks.append((role_name, "OK", "deterministic / disabled"))
+def provider_checks(cfg) -> list[tuple[str, str, str, list[str]]]:
+    checks: list[tuple[str, str, str, list[str]]] = []
+    for role_name, status, detail, hints in provider_diagnostics(cfg):
+        if "via Ollama" in detail:
+            ollama_status, ollama_detail = _ollama_status(detail.split(" via ", 1)[0])
+            checks.append((role_name, ollama_status if status != "FAIL" else status, ollama_detail, hints))
             continue
-        provider = provider_for_model(model)
-        if provider == "anthropic":
-            checks.append(
-                (
-                    role_name,
-                    "OK" if os.getenv("ANTHROPIC_API_KEY") else "FAIL",
-                    f"{model} via Anthropic ({'ANTHROPIC_API_KEY set' if os.getenv('ANTHROPIC_API_KEY') else 'missing ANTHROPIC_API_KEY'})",
-                )
-            )
-            continue
-        if provider == "openai":
-            checks.append(
-                (
-                    role_name,
-                    "OK" if os.getenv("OPENAI_API_KEY") else "FAIL",
-                    f"{model} via OpenAI ({'OPENAI_API_KEY set' if os.getenv('OPENAI_API_KEY') else 'missing OPENAI_API_KEY'})",
-                )
-            )
-            continue
-        if provider == "ollama":
-            checks.append((role_name, *_ollama_status(model)))
-            continue
-        checks.append((role_name, "FAIL", f"unsupported model/provider mapping for {model!r}"))
+        checks.append((role_name, status, detail, hints))
     return checks
 
 
@@ -234,15 +224,7 @@ def _ollama_status(model: str) -> tuple[str, str]:
         response.raise_for_status()
         return "OK", f"{model} via Ollama (localhost:11434 reachable)"
     except Exception as exc:
-        return "FAIL", f"{model} via Ollama (localhost:11434 unreachable: {exc})"
-
-
-def provider_for_model(model: str) -> str:
-    if model.startswith("claude"):
-        return "anthropic"
-    if model.startswith(("gpt", "o1", "o3")):
-        return "openai"
-    return "ollama"
+        return "WARN", f"{model} via Ollama (localhost:11434 unreachable: {exc})"
 
 
 def resolve_task_input(args: argparse.Namespace) -> dict[str, Any]:

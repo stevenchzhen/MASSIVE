@@ -11,6 +11,8 @@ pip install -e ".[dev]"
 cellforge doctor
 ```
 
+`doctor` will try to start the local Temporal stack for you when Docker is available; use `cellforge doctor --no-fix` if you only want a passive check.
+
 If `doctor` is green, start the local stack and worker:
 
 ```bash
@@ -53,7 +55,7 @@ cellforge doctor
 
 - Python version
 - config loading
-- Temporal connectivity
+- Temporal connectivity, with local docker bootstrap when possible
 - required provider env vars
 - model/provider wiring implied by the config
 
