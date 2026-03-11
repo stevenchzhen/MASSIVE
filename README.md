@@ -2,7 +2,7 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/cellforge.svg)](https://pypi.org/project/cellforge/) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/) [![Tests passing](https://img.shields.io/badge/tests-passing-brightgreen.svg)](#)
 
-## The 15-second hook
+## What is it
 
 MASSIVE, published as `cellforge`, is a Python runtime for self-healing AI execution that handles capability gaps without defaulting to unchecked agent improvisation. What makes it different is a fail-closed build path with role separation, scoped context, and a deterministic verifier, so failures and assumptions do not cascade across stages. The cell never silently fails — it either builds what it needs or tells you why it can't.
 
