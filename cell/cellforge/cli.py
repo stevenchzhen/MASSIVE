@@ -62,7 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _add_task_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("instruction", nargs="?", help="Task instruction. Omit when using --task-file or --example.")
     parser.add_argument("--task-file", help="YAML or JSON task manifest.")
-    parser.add_argument("--example", choices=["document-extraction"], help="Run a bundled example task.")
+    parser.add_argument("--example", choices=["document-extraction", "tool-creation"], help="Run a bundled example task.")
     parser.add_argument("--document", dest="documents", action="append", default=[], help="Input document path. Repeatable.")
     parser.add_argument("--config", default=str(default_config_path()))
     parser.add_argument("--host", default=os.getenv("CELLFORGE_TEMPORAL_HOST", os.getenv("TEMPORAL_HOST", "localhost:7233")))

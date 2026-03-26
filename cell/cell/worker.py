@@ -8,6 +8,7 @@ from temporalio.worker import Worker
 
 from cell.runtime.activities import (
     install_public_tool,
+    register_dynamic_tool,
     run_builder,
     run_diagnostician,
     run_executor,
@@ -21,7 +22,7 @@ def create_worker(client: Client, task_queue: str) -> Worker:
         client,
         task_queue=task_queue,
         workflows=[CellWorkflow],
-        activities=[run_executor, run_diagnostician, run_builder, run_verifier, install_public_tool],
+        activities=[run_executor, run_diagnostician, run_builder, run_verifier, install_public_tool, register_dynamic_tool],
     )
 
 

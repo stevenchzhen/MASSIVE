@@ -44,8 +44,9 @@ class AnthropicAdapter(ModelAdapter):
             payload["system"] = system
         if tools:
             payload["tools"] = tools
-        if response_format:
-            payload["response_format"] = response_format
+        # Anthropic's native Messages API does not accept OpenAI-style response_format.
+        # Callers still pass prompt-level JSON instructions, so we ignore this here.
+        _ = response_format
 
         started = time.perf_counter()
         async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -59,7 +60,11 @@ class AnthropicAdapter(ModelAdapter):
                 json=payload,
             )
         latency_ms = int((time.perf_counter() - started) * 1000)
-        response.raise_for_status()
+        if response.is_error:
+            detail = _error_detail(response)
+            raise RuntimeError(
+                f"Anthropic API error {response.status_code} for model {self.model}: {detail}"
+            )
         data = response.json()
         blocks = data.get("content", [])
         text = "\n".join(block.get("text", "") for block in blocks if block.get("type") == "text")
@@ -76,3 +81,19 @@ class AnthropicAdapter(ModelAdapter):
             cost_usd=round(cost, 8),
         )
 
+
+def _error_detail(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except ValueError:
+        text = response.text.strip()
+        return text or response.reason_phrase
+    error = payload.get("error")
+    if isinstance(error, dict):
+        error_type = error.get("type")
+        message = error.get("message")
+        if error_type and message:
+            return f"{error_type}: {message}"
+        if message:
+            return str(message)
+    return str(payload)

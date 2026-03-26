@@ -181,4 +181,12 @@ Run the suite from the repo root:
 pytest -q
 ```
 
-The current root-level editable install and test path are the supported developer workflow.
+For the structure itself, use the staged runner:
+
+```bash
+python scripts/test_structure.py quick
+python scripts/test_structure.py baseline
+python scripts/test_structure.py self-heal
+```
+
+`quick` proves the orchestration and verifier paths deterministically with mocked workflow tests, `baseline` runs the shipped extraction example end to end, and `self-heal` pressures the live blocker -> build -> verify -> resume path with a restrictive config and a proprietary parsing task. The live phases call `cellforge doctor`, start an ephemeral worker unless you pass `--use-running-worker`, and then validate the emitted artifact bundle.

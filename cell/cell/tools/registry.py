@@ -4,6 +4,7 @@ import importlib
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from cell.tools.sandbox import Sandbox
 from cell.types import TestCase, ToolArtifact, ToolDescription, ToolSpec
 
 
@@ -37,7 +38,12 @@ class ToolRegistry:
 
     def _load_static(self, static_tools: list[str]) -> None:
         for tool_id in static_tools:
-            module = importlib.import_module(f"cell.tools.static.{tool_id}")
+            try:
+                module = importlib.import_module(f"cell.tools.static.{tool_id}")
+            except ModuleNotFoundError:
+                if tool_id in self._shared_dynamic or tool_id in self._public_library:
+                    continue
+                raise
             entry_point = getattr(module, "ENTRY_POINT", tool_id)
             self._static[tool_id] = StaticTool(
                 tool_id=getattr(module, "TOOL_ID"),
@@ -50,6 +56,10 @@ class ToolRegistry:
             )
 
     def list(self) -> list[ToolDescription]:
+        return self.describe_available()
+
+    def describe_available(self, tool_ids: list[str] | None = None) -> list[ToolDescription]:
+        selected = set(tool_ids) if tool_ids is not None else None
         descriptions = [
             ToolDescription(
                 tool_id=tool.tool_id,
@@ -60,6 +70,7 @@ class ToolRegistry:
                 is_dynamic=False,
             )
             for tool in self._static.values()
+            if selected is None or tool.tool_id in selected
         ]
         descriptions.extend(
             ToolDescription(
@@ -71,6 +82,7 @@ class ToolRegistry:
                 is_dynamic=True,
             )
             for package in self._shared_dynamic.values()
+            if selected is None or package.artifact.name in selected
         )
         return descriptions
 
@@ -108,6 +120,14 @@ class ToolRegistry:
 
     def is_local_tool(self, tool_id: str) -> bool:
         return tool_id in self._static or tool_id in self._shared_dynamic
+
+    async def execute(self, tool_id: str, arguments: dict[str, Any], sandbox: Sandbox) -> Any:
+        if tool_id in self._static:
+            return self._static[tool_id].func(**arguments)
+        package = self.get_package(tool_id)
+        if package is None:
+            raise KeyError(f"Unknown tool: {tool_id}")
+        return await sandbox.execute(package.artifact, arguments)
 
     @classmethod
     def register_public_package(cls, tool_id: str, artifact: ToolArtifact, spec: ToolSpec) -> None:

@@ -1,0 +1,7 @@
+VENDOR<<Northwind Repairs>>
+INVOICE<<NW-1042>>
+DATE<<2026-03-10>>
+ROW<<name=Rotor Kit;qty=2;unit_usd=12.50>>
+ROW<<name=Seal Pack;qty=1;unit_usd=7.00>>
+FEE<<shipping_usd=1.25>>
+TOTAL<<usd=33.25>>

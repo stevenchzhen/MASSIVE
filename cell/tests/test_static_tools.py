@@ -1,4 +1,5 @@
 from cell.tools.registry import ToolRegistry
+from cell.tools.sandbox import Sandbox, SandboxPolicy
 from cell.types import TestCase, ToolArtifact, ToolSpec
 
 
@@ -80,3 +81,46 @@ def test_public_tool_can_be_installed_into_local_registry() -> None:
     package = registry.install_public_package("public_adder")
     assert package.artifact.name == "public_adder"
     assert registry.is_local_tool("public_adder") is True
+
+
+async def test_registered_dynamic_tool_can_execute() -> None:
+    registry = ToolRegistry(["calculator_basic"])
+    tool_id = registry.register_dynamic(
+        ToolArtifact(
+            spec_id="spec-2",
+            name="dynamic_adder",
+            entry_point="dynamic_adder",
+            source_code="def dynamic_adder(a, b):\n    return {'result': a + b}\n",
+        ),
+        ToolSpec(
+            spec_id="spec-2",
+            name="dynamic_adder",
+            description="Adds two numbers dynamically",
+            input_schema={
+                "type": "object",
+                "properties": {"a": {"type": "number"}, "b": {"type": "number"}},
+                "required": ["a", "b"],
+            },
+            output_schema={
+                "type": "object",
+                "properties": {"result": {"type": "number"}},
+                "required": ["result"],
+            },
+            test_cases=[
+                TestCase(description="one", input={"a": 1, "b": 2}, expected_output={"result": 3}),
+                TestCase(description="two", input={"a": 2, "b": 3}, expected_output={"result": 5}),
+                TestCase(description="three", input={"a": 0, "b": 0}, expected_output={"result": 0}),
+            ],
+            edge_cases=[
+                TestCase(description="float", input={"a": 1.5, "b": 2.5}, expected_output={"result": 4.0}),
+                TestCase(description="large", input={"a": 10000, "b": 1}, expected_output={"result": 10001}),
+            ],
+            constraints=["pure"],
+        ),
+    )
+    result = await registry.execute(
+        tool_id,
+        {"a": 4, "b": 5},
+        Sandbox(SandboxPolicy(max_execution_time_sec=2, max_memory_mb=128, allowed_imports=[])),
+    )
+    assert result == {"result": 9}

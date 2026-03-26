@@ -1,0 +1,58 @@
+instruction: "Parse the attached proprietary invoice note into structured fields. If the current tool inventory cannot deterministically parse the repeated ROW<<...>> segments, emit a blocker and build the minimum verified parser needed to finish the task."
+documents:
+  - "proprietary_invoice.txt"
+result_schema_id: "invoice_reconciliation"
+result_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    vendor_name:
+      type: string
+    invoice_number:
+      type: string
+    invoice_date:
+      type: string
+    line_items:
+      type: array
+      items:
+        type: object
+        additionalProperties: false
+        properties:
+          name:
+            type: string
+          qty:
+            type: integer
+          unit_price_usd:
+            type: number
+          line_total_usd:
+            type: number
+        required:
+          - name
+          - qty
+          - unit_price_usd
+          - line_total_usd
+    shipping_fee_usd:
+      type: number
+    stated_total_usd:
+      type: number
+    computed_total_usd:
+      type: number
+    matches_stated_total:
+      type: boolean
+  required:
+    - vendor_name
+    - invoice_number
+    - invoice_date
+    - line_items
+    - shipping_fee_usd
+    - stated_total_usd
+    - computed_total_usd
+    - matches_stated_total
+context:
+  output_rules:
+    - "Use exact values from the document."
+    - "computed_total_usd must equal the sum of line_total_usd plus shipping_fee_usd."
+    - "If deterministic parsing is not possible with the current tool set, block instead of hand-parsing."
+trust_level: high
+allow_dynamic_tools: true
+max_cost_usd: 1.5

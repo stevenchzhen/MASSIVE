@@ -84,6 +84,7 @@ class CellWorkflow:
         retries = 0
         dynamic_tools: list[str] = []
         tools = list(cfg.static_tools)
+        actual_tools_used: set[str] = set()
         model_id = "deterministic"
         started_at = workflow.now()
         reasoning_summary = ""
@@ -137,7 +138,7 @@ class CellWorkflow:
                 sources=sources,
                 reasoning_summary=summary,
                 assumptions=assumptions,
-                tools_used=tools,
+                tools_used=sorted(actual_tools_used),
                 dynamic_tools_created=dynamic_tools,
                 model_id=model_id,
                 blockers_encountered=blockers_encountered,
@@ -167,7 +168,10 @@ class CellWorkflow:
                 args=[
                     task.model_dump(mode="json"),
                     tools,
-                    cfg.agent("executor").model_dump(mode="json"),
+                    {
+                        **cfg.agent("executor").model_dump(mode="json"),
+                        "sandbox_policy": cfg.sandbox.model_dump(mode="json"),
+                    },
                     _render_context(task),
                 ],
                 start_to_close_timeout=timedelta(seconds=cfg.limits.execution_timeout_sec),
@@ -198,6 +202,7 @@ class CellWorkflow:
 
             if executor_result["status"] == "complete":
                 payload = executor_result["payload"]
+                actual_tools_used.update(payload.get("tools_invoked", []))
                 candidate_result = payload.get("result", {})
                 if not _schema_matches(candidate_result, task.result_schema):
                     result_payload = {
@@ -222,6 +227,7 @@ class CellWorkflow:
                 return finish(CellState.ERROR, reasoning_summary)
 
             blockers_encountered += 1
+            actual_tools_used.update(executor_result["payload"].get("tools_invoked", []))
             if blockers_encountered > cfg.limits.max_blockers_per_task:
                 result_payload = {"status": "escalated", "reason": "Max blockers exceeded"}
                 reasoning_summary = "Executor encountered too many blockers."
@@ -372,8 +378,15 @@ class CellWorkflow:
                 )
                 record_verifier_report(verifier_result)
                 if verifier_result["passed"]:
-                    tools.append(artifact["name"])
-                    dynamic_tools.append(artifact["name"])
+                    registered = await workflow.execute_activity(
+                        "register_dynamic_tool",
+                        args=[artifact, spec, cfg.static_tools],
+                        start_to_close_timeout=timedelta(seconds=cfg.limits.build_timeout_sec),
+                    )
+                    registered_tool_id = registered["tool_id"]
+                    if registered_tool_id not in tools:
+                        tools.append(registered_tool_id)
+                    dynamic_tools.append(registered_tool_id)
                     bus.emit(
                         CellMessage(
                             id=f"msg_tool_{len(bus.get_log())}",
@@ -381,7 +394,7 @@ class CellWorkflow:
                             source_agent=AgentRole.RUNTIME,
                             target_agent=AgentRole.EXECUTOR,
                             message_type=MessageType.TOOL_READY,
-                            payload={"tool_id": artifact["name"]},
+                            payload={"tool_id": registered_tool_id},
                             correlation_id=f"tool-{blockers_encountered}",
                         )
                     )

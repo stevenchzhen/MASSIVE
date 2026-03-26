@@ -1,0 +1,45 @@
+cell_id: "cell_toolpath"
+version: "1.0.0"
+topology: high_trust
+agents:
+  executor:
+    model: "claude-sonnet-4-20250514"
+    confidence_threshold: 0.95
+    additional_instructions: |
+      Treat proprietary repeated-delimiter row formats as requiring a verified parser tool unless an existing tool explicitly supports them.
+      Do not manually parse custom ROW<<...>> or FEE<<...>> segments from narrative context.
+      If a verified tool is not available, emit a blocker and request the minimum parser needed to finish the task.
+  diagnostician:
+    model: "claude-sonnet-4-20250514"
+  builder:
+    model: "claude-sonnet-4-20250514"
+  verifier:
+    model: null
+limits:
+  max_execution_retries: 3
+  max_tool_build_retries: 2
+  max_blockers_per_task: 3
+  execution_timeout_sec: 300
+  build_timeout_sec: 120
+  verify_timeout_sec: 60
+  total_cell_timeout_sec: 1800
+static_tools:
+  - "calculator_basic"
+sandbox:
+  max_execution_time_sec: 30
+  max_memory_mb: 256
+  allowed_imports:
+    - "math"
+    - "json"
+    - "re"
+    - "datetime"
+    - "decimal"
+    - "collections"
+    - "statistics"
+    - "itertools"
+    - "functools"
+    - "typing"
+    - "fractions"
+cost:
+  budget_usd: 5.0
+  alert_threshold_usd: 3.0

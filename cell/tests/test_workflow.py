@@ -73,6 +73,7 @@ async def _execute_with_activities(
     verifier_fn,
     config: dict,
     install_public_fn=None,
+    register_dynamic_fn=None,
 ) -> dict:
     async with await WorkflowEnvironment.start_time_skipping() as env:
         client: Client = env.client
@@ -86,6 +87,7 @@ async def _execute_with_activities(
                 builder_fn,
                 verifier_fn,
                 install_public_fn or _unused_install_public_tool,
+                register_dynamic_fn or _unused_register_dynamic_tool,
             ],
         ):
             return await client.execute_workflow(
@@ -117,6 +119,11 @@ async def _unused_verifier(artifact: dict, spec: dict, sandbox_config: dict) -> 
 @activity.defn(name="install_public_tool")
 async def _unused_install_public_tool(tool_id: str, static_tools: list[str]) -> dict:
     return {}
+
+
+@activity.defn(name="register_dynamic_tool")
+async def _unused_register_dynamic_tool(artifact: dict, spec: dict, static_tools: list[str]) -> dict:
+    return {"tool_id": artifact["name"]}
 
 
 @pytest.mark.timeout(30)

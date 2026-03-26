@@ -89,7 +89,8 @@ class Cell:
         instruction: str | TaskInput,
         **kwargs,
     ) -> AsyncIterator[CellEvent]:
-        task_id = instruction.task_id if isinstance(instruction, TaskInput) else kwargs.get("workflow_id") or f"task_{uuid4().hex[:12]}"
+        workflow_id = kwargs.pop("workflow_id", None)
+        task_id = instruction.task_id if isinstance(instruction, TaskInput) else workflow_id or f"task_{uuid4().hex[:12]}"
         cell_id = "cell_default"
         yield CellEvent(
             timestamp=utc_now(),

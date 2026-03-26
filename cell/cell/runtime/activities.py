@@ -5,7 +5,7 @@ from temporalio import activity
 from cell.agents.base import AgentInput
 from cell.agents.builder import BuilderAgent
 from cell.agents.diagnostician import DiagnosticianAgent
-from cell.agents.executor import ExecutorAgent
+from cell.agents.executor import ExecutorAgent, ToolRuntime
 from cell.agents.verifier import VerifierAgent
 from cell.models import create_adapter
 from cell.tools.registry import ToolRegistry
@@ -16,13 +16,24 @@ from cell.types import ToolArtifact, ToolSpec
 @activity.defn(name="run_executor")
 async def run_executor(task_input: dict, tools: list[str], model_config: dict | str, context: str) -> dict:
     adapter = create_adapter(model_config)
-    agent = ExecutorAgent(model=adapter)
+    config_dict = model_config if isinstance(model_config, dict) else {"model": model_config}
+    sandbox_policy = SandboxPolicy.model_validate(config_dict.get("sandbox_policy", {}))
+    registry = ToolRegistry(tools)
+    tool_descriptions = [item.model_dump(mode="json") for item in registry.describe_available(tools)]
+    agent = ExecutorAgent(
+        model=adapter,
+        tool_runtime=ToolRuntime(
+            registry=registry,
+            sandbox=Sandbox(sandbox_policy),
+            available_tool_ids=tools,
+        ),
+    )
     result = await agent.invoke(
         AgentInput(
             payload=task_input,
             tools=tools,
             context_window=context,
-            config=model_config if isinstance(model_config, dict) else {"model": model_config},
+            config={**config_dict, "tool_descriptions": tool_descriptions},
         )
     )
     return result.model_dump(mode="json")
@@ -79,3 +90,13 @@ async def install_public_tool(tool_id: str, static_tools: list[str]) -> dict:
         "spec": package.spec.model_dump(mode="json"),
         "origin": package.origin,
     }
+
+
+@activity.defn(name="register_dynamic_tool")
+async def register_dynamic_tool(artifact: dict, spec: dict, static_tools: list[str]) -> dict:
+    registry = ToolRegistry(static_tools)
+    tool_id = registry.register_dynamic(
+        ToolArtifact.model_validate(artifact),
+        ToolSpec.model_validate(spec),
+    )
+    return {"tool_id": tool_id}
