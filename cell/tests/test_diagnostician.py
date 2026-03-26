@@ -34,6 +34,13 @@ async def test_diagnostician_emits_tool_spec(mock_model_factory) -> None:
                                 {"description": "float", "input": {"a": 1.5, "b": 2.5}, "expected_output": {"result": 4.0}},
                             ],
                             "constraints": ["pure"],
+                            "task_validation_cases": [
+                                {
+                                    "description": "task sample",
+                                    "input": {"a": 10, "b": 5},
+                                    "expected_output": {"result": 15},
+                                }
+                            ],
                         },
                     }
                 )
@@ -46,6 +53,7 @@ async def test_diagnostician_emits_tool_spec(mock_model_factory) -> None:
     assert result.status == "complete"
     assert result.payload["action"] == "create_new"
     assert result.payload["tool_spec"]["name"] == "adder"
+    assert result.payload["tool_spec"]["task_validation_cases"][0]["expected_output"]["result"] == 15
 
 
 async def test_diagnostician_context_request(mock_model_factory) -> None:

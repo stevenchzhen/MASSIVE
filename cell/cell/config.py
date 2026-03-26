@@ -58,6 +58,8 @@ class LimitsConfig(BaseModel):
     build_timeout_sec: int = Field(default=120, ge=1)
     verify_timeout_sec: int = Field(default=60, ge=1)
     total_cell_timeout_sec: int = Field(default=1800, ge=1)
+    max_task_validation_samples: int = Field(default=5, ge=0)
+    task_validation_sample_ratio: float = Field(default=0.1, ge=0.0, le=1.0)
 
 
 class SandboxConfig(BaseModel):

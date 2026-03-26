@@ -14,9 +14,12 @@ class DiagnosticianAgent(Agent):
             "Prefer the cheapest adequate path in this order: use_existing, install_public, adapt_existing, create_new.\n"
             "If action is adapt_existing or create_new, produce a complete ToolSpec with exact input/output "
             "schemas, at least 3 behavioral test cases, and at least 2 edge cases.\n"
+            "If task_data_samples are provided, convert the most useful ones into exact task_validation_cases in the ToolSpec. "
+            "These cases should reflect real task inputs in scoped form, not synthetic placeholders.\n"
             "If adapting a tool, include base_tool_id, base_tool_source, and base_test_cases when available.\n"
             "Good test cases use concrete inputs and exact expected outputs. Example: "
             '{"description":"Adds positive ints","input":{"a":2,"b":3},"expected_output":{"result":5}}.\n'
+            "Good task_validation_cases also use exact expected outputs derived from the provided samples.\n"
             "If action is use_existing, specify existing_tool_id.\n"
             "If action is install_public, specify public_tool_id.\n"
             "If action is context_request, specify the exact additional context required.\n"

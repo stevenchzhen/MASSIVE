@@ -41,6 +41,17 @@ class VerifierAgent:
         for edge_case in spec.edge_cases:
             results.append(await sandbox.run_test(artifact, edge_case))
 
+        for task_case in spec.task_validation_cases:
+            task_result = await sandbox.run_test(artifact, task_case)
+            results.append(
+                VerificationResult(
+                    check_name=f"task-data:{task_case.case_id}",
+                    passed=task_result.passed,
+                    details=task_result.details,
+                    observed_output=task_result.observed_output,
+                )
+            )
+
         for fuzz_input in generate_fuzz_inputs(spec.input_schema, count=10):
             results.append(await sandbox.run_fuzz(artifact, fuzz_input, spec.output_schema))
 
@@ -57,6 +68,22 @@ class VerifierAgent:
                 )
                 continue
             results.append(validate_json_schema(output, spec.output_schema, check_name=f"schema:{test_case.case_id}"))
+
+        for task_case in spec.task_validation_cases:
+            try:
+                output = await sandbox.execute(artifact, task_case.input)
+            except Exception as exc:
+                results.append(
+                    VerificationResult(
+                        check_name=f"schema:task-data:{task_case.case_id}",
+                        passed=False,
+                        details=f"Could not validate task-derived sample because execution failed: {exc}",
+                    )
+                )
+                continue
+            results.append(
+                validate_json_schema(output, spec.output_schema, check_name=f"schema:task-data:{task_case.case_id}")
+            )
 
         return _build_verdict(artifact, spec, results)
 

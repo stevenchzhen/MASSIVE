@@ -23,6 +23,8 @@ limits:
   build_timeout_sec: 120
   verify_timeout_sec: 60
   total_cell_timeout_sec: 1800
+  max_task_validation_samples: 5
+  task_validation_sample_ratio: 0.1
 static_tools:
   - "calculator_basic"
 sandbox:

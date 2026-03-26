@@ -151,3 +151,24 @@ async def test_verifier_runs_regression_cases_for_adapted_tool() -> None:
     regression_results = [result for result in verdict.results if result.check_name.startswith("regression:")]
     assert regression_results
     assert all(result.passed for result in regression_results)
+
+
+async def test_verifier_runs_task_validation_cases() -> None:
+    agent = VerifierAgent()
+    spec = _spec().model_copy(
+        update={
+            "task_validation_cases": [
+                TestCase(description="task-derived", input={"a": 3, "b": 4}, expected_output={"result": 7})
+            ]
+        }
+    )
+    artifact = ToolArtifact(
+        spec_id=spec.spec_id,
+        name="adder",
+        entry_point="adder",
+        source_code="def adder(a, b):\n    return {'result': a + b}\n",
+    )
+    verdict = await agent.verify(artifact, spec, Sandbox(_policy()))
+    task_results = [result for result in verdict.results if result.check_name.startswith("task-data:")]
+    assert task_results
+    assert all(result.passed for result in task_results)

@@ -7,8 +7,10 @@ from temporalio import workflow
 from cell.config import CellConfig
 from cell.output.envelope import build_output_envelope
 from cell.runtime.bus import CellBus
+from cell.runtime.sampling import derive_task_data_samples, should_derive_task_data_samples
 from cell.types import (
     AgentRole,
+    Blocker,
     CellMessage,
     CellState,
     CompletionStatus,
@@ -242,9 +244,20 @@ class CellWorkflow:
             planning_state = CellState.DIAGNOSING if cfg.topology == Topology.HIGH_TRUST else CellState.BUILDING
             bus.log_state_transition(current_state, planning_state)
             current_state = planning_state
+            blocker = Blocker.model_validate(executor_result["payload"]["blocker"])
+            diagnosis_input = blocker.model_dump(mode="json")
+            if should_derive_task_data_samples(task, blocker):
+                task_samples = derive_task_data_samples(
+                    task,
+                    blocker,
+                    sample_ratio=cfg.limits.task_validation_sample_ratio,
+                    max_samples=cfg.limits.max_task_validation_samples,
+                )
+                if task_samples:
+                    diagnosis_input["task_data_samples"] = [sample.model_dump(mode="json") for sample in task_samples]
             diagnosis = await workflow.execute_activity(
                 "run_diagnostician",
-                args=[executor_result["payload"]["blocker"], cfg.agent(cfg.planner_role()).model_dump(mode="json")],
+                args=[diagnosis_input, cfg.agent(cfg.planner_role()).model_dump(mode="json")],
                 start_to_close_timeout=timedelta(seconds=cfg.limits.execution_timeout_sec),
             )
             if timed_out():

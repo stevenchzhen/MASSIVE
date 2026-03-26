@@ -151,6 +151,21 @@ class TestCase(FrozenModel):
 TestCase.__test__ = False
 
 
+class TaskDataSample(FrozenModel):
+    sample_id: str = Field(
+        default_factory=lambda: f"sample_{uuid4().hex[:12]}",
+        description="Unique identifier for a task-derived validation sample.",
+    )
+    source_id: str = Field(description="Originating source identifier for this sample.")
+    content_hash: str = Field(description="Stable hash of the sampled content.")
+    content: str = Field(description="Sampled content passed as scoped context to later stages.")
+    selection_reason: str = Field(description="Why this sample was selected for validation.")
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Optional metadata about where or how the sample was selected.",
+    )
+
+
 class Blocker(FrozenModel):
     blocker_id: str = Field(
         default_factory=lambda: f"blk_{uuid4().hex[:12]}",
@@ -200,6 +215,10 @@ class ToolSpec(FrozenModel):
     base_test_cases: list[TestCase] | None = Field(
         default=None,
         description="Regression test cases that must continue to pass after adaptation.",
+    )
+    task_validation_cases: list[TestCase] = Field(
+        default_factory=list,
+        description="Exact verification cases derived from sampled task data.",
     )
 
     @field_validator("test_cases")
